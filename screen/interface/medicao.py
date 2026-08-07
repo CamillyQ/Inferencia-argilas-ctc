@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Slot, QRectF
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QFrame, QSizePolicy, QStackedWidget, QDoubleSpinBox
+    QPushButton, QFrame, QSizePolicy, QStackedWidget, QDoubleSpinBox,
+    QFileDialog, QMessageBox
 )
-from PySide6.QtGui import QFont, QPainter, QPen, QColor
+from PySide6.QtGui import QFont, QPainter, QPen, QColor, QPdfWriter, QPageSize
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis, QScatterSeries
+from datetime import datetime
 
 HEX_BG           = "#F5F5F3"
 HEX_SURFACE      = "#FFFFFF"
@@ -20,8 +22,8 @@ HEX_OK           = "#2E7D32"
 HEX_SURFACE_PRES = "#2E5284"
 
 class MedicaoScreen(QWidget):
+    
 
-    # Estados da tela
     ESTADO_INICIAL     = 0
     ESTADO_COLETA      = 1
     ESTADO_FINALIZADO  = 2
@@ -29,14 +31,16 @@ class MedicaoScreen(QWidget):
     def __init__(self, app_instance, parent=None):
         super().__init__(parent)
         self.app_app = app_instance
+        self.massa_amostra_g = None
         self.init_ui()
+        
+        
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # ── Cabeçalho ────────────────────────────────────────────────────
         header_frame = QFrame()
         header_frame.setFixedHeight(48)
         header_frame.setStyleSheet("background-color: #202225; border: none;")
@@ -56,14 +60,12 @@ class MedicaoScreen(QWidget):
         header_layout.addWidget(self.status_arduino)
         main_layout.addWidget(header_frame)
 
-        # ── Corpo: um QStackedWidget com as 3 telas de estado ───────────
         self.stack_estados = QStackedWidget()
-        self.stack_estados.addWidget(self._build_pagina_inicial())      # 0
-        self.stack_estados.addWidget(self._build_pagina_coleta())       # 1
-        self.stack_estados.addWidget(self._build_pagina_finalizado())   # 2
+        self.stack_estados.addWidget(self._build_pagina_inicial())
+        self.stack_estados.addWidget(self._build_pagina_coleta())
+        self.stack_estados.addWidget(self._build_pagina_finalizado())
         main_layout.addWidget(self.stack_estados, stretch=1)
 
-        # ── Rodapé: botões que existem em qualquer estado ───────────────
         footer_layout = QHBoxLayout()
         footer_layout.setContentsMargins(12, 0, 12, 12)
         footer_layout.setSpacing(8)
@@ -72,8 +74,9 @@ class MedicaoScreen(QWidget):
         self.btn_processar = QPushButton("Processar")
         self.btn_salvar = QPushButton("Salvar")
         self.btn_voltar = QPushButton("Voltar")
+        self.btn_iniciar = QPushButton("Iniciar")
 
-        for btn in (self.btn_parar, self.btn_processar, self.btn_salvar, self.btn_voltar):
+        for btn in (self.btn_iniciar, self.btn_parar, self.btn_processar, self.btn_salvar, self.btn_voltar):
             btn.setFixedHeight(54)
             btn.setFont(QFont("Sans-Serif", 10, QFont.Bold))
             btn.setStyleSheet(self.get_button_style())
@@ -82,16 +85,16 @@ class MedicaoScreen(QWidget):
         self.btn_parar.clicked.connect(self.app_app.parar_teste)
         self.btn_processar.clicked.connect(self.app_app.detectar_cmc)
         self.btn_voltar.clicked.connect(self.app_app.voltar_home)
+        self.btn_iniciar.clicked.connect(self._on_iniciar_clicado)
+        self.btn_salvar.clicked.connect(self.exportar_relatorio)
 
         main_layout.addLayout(footer_layout)
         self.setStyleSheet(f"background-color: {HEX_BG};")
 
         self.mostrar_estado_inicial()
 
-    # ════════════════════════════════════════════════════════════════════
-    # ESTADO 0 - INICIAL: pede a massa da amostra e inicia a coleta
-    # ════════════════════════════════════════════════════════════════════
     def _build_pagina_inicial(self):
+        
         pagina = QWidget()
         layout = QVBoxLayout(pagina)
         layout.setAlignment(Qt.AlignCenter)
@@ -114,14 +117,24 @@ class MedicaoScreen(QWidget):
 
         self.spin_massa_amostra = QDoubleSpinBox()
         self.spin_massa_amostra.setDecimals(1)
-        self.spin_massa_amostra.setRange(0, 100)
-        self.spin_massa_amostra.setSingleStep(1.0)
+        self.spin_massa_amostra.setRange(0, 1.0)
+        self.spin_massa_amostra.setSingleStep(0.1)
         self.spin_massa_amostra.setSuffix(" g")
-        self.spin_massa_amostra.setFixedWidth(220)
-        self.spin_massa_amostra.setStyleSheet(
-            f"background-color: {HEX_SURFACE}; border: 1px solid {HEX_BORDER}; "
-            "border-radius: 4px; padding: 8px; font-size: 20px;"
-        )
+        self.spin_massa_amostra.setFixedSize(300,60)
+        self.spin_massa_amostra.setStyleSheet(f"""
+            QDoubleSpinBox {{
+                background-color: {HEX_SURFACE};
+                border: 1px solid {HEX_BORDER};
+                border-radius: 6px;
+                padding: 8px;
+                font-size: 20px;
+            }}
+
+            QDoubleSpinBox::up-button,
+            QDoubleSpinBox::down-button {{
+                width: 40px;
+            }}
+            """)
         self.spin_massa_amostra.setAlignment(Qt.AlignCenter)
 
         btn_iniciar_coleta = QPushButton("Iniciar Coleta")
@@ -140,19 +153,28 @@ class MedicaoScreen(QWidget):
         return pagina
 
     def _on_iniciar_coleta_clicado(self):
-        massa_amostra_g = self.spin_massa_amostra.value()
-        self.app_app.iniciar_teste(massa_amostra_g)
+        """
+        Clique em 'Iniciar Coleta' (página inicial): só salva a massa
+        informada e leva o usuário para a tela de coleta, em modo
+        'aguardando'. A aquisição real (Arduino, timers) só começa
+        quando o botão 'Iniciar' do rodapé for pressionado.
+        """
+        self.massa_amostra_g = self.spin_massa_amostra.value()
+        self.mostrar_estado_coleta_aguardando()
 
-    # ════════════════════════════════════════════════════════════════════
-    # ESTADO 1 - COLETA: gráfico ao vivo + titulação manual
-    # ════════════════════════════════════════════════════════════════════
+    def _on_iniciar_clicado(self):
+        """
+        Clique em 'Iniciar' (rodapé): aqui sim dispara o início real
+        da aquisição, usando a massa salva no passo anterior.
+        """
+        self.app_app.iniciar_teste(self.massa_amostra_g)
+
     def _build_pagina_coleta(self):
         pagina = QWidget()
         body_layout = QHBoxLayout(pagina)
         body_layout.setContentsMargins(12, 12, 12, 12)
         body_layout.setSpacing(12)
 
-        # Painel esquerdo: cards + controle de titulação
         left_panel = QVBoxLayout()
         left_panel.setSpacing(8)
 
@@ -180,14 +202,25 @@ class MedicaoScreen(QWidget):
         self.spin_volume_adicao.setDecimals(2)
         self.spin_volume_adicao.setRange(0.01, 100.0)
         self.spin_volume_adicao.setValue(2.00)
+        self
         self.spin_volume_adicao.setSingleStep(0.5)
-        self.spin_volume_adicao.setStyleSheet(
-            f"background-color: {HEX_BG}; border: 1px solid {HEX_BORDER}; "
-            "border-radius: 4px; padding: 4px; font-size: 16px;"
-        )
+        self.spin_volume_adicao.setStyleSheet(f"""
+            QDoubleSpinBox {{
+                background-color: {HEX_BG};
+                border: 1px solid {HEX_BORDER};
+                border-radius: 6px;
+                padding: 8px;
+                font-size: 20px;
+            }}
+
+            QDoubleSpinBox::up-button,
+            QDoubleSpinBox::down-button {{
+                width: 40px;
+            }}
+            """)
 
         btn_registrar_adicao = QPushButton("Registrar Adição")
-        btn_registrar_adicao.setFixedHeight(44)
+        btn_registrar_adicao.setFixedHeight(60)
         btn_registrar_adicao.setFont(QFont("Sans-Serif", 9, QFont.Bold))
         btn_registrar_adicao.setStyleSheet(self.get_button_style(is_action=True))
         btn_registrar_adicao.clicked.connect(self._on_registrar_adicao)
@@ -199,7 +232,6 @@ class MedicaoScreen(QWidget):
         left_panel.addWidget(titulacao_frame)
         left_panel.addStretch(1)
 
-        # Painel direito: gráfico ao vivo Condutividade x Tempo
         chart_frame = QFrame()
         chart_frame.setStyleSheet(
             f"background-color: {HEX_SURFACE}; border: 1px solid {HEX_BORDER}; border-radius: 4px;"
@@ -239,9 +271,6 @@ class MedicaoScreen(QWidget):
         volume_mL = self.spin_volume_adicao.value()
         self.app_app.registrar_adicao(volume_mL)
 
-    # ════════════════════════════════════════════════════════════════════
-    # ESTADO 2 - FINALIZADO: amostra coletada, pronta pra processar/resultado
-    # ════════════════════════════════════════════════════════════════════
     def _build_pagina_finalizado(self):
         pagina = QWidget()
         body_layout = QHBoxLayout(pagina)
@@ -253,7 +282,7 @@ class MedicaoScreen(QWidget):
 
         self.card_cmc = self.create_numeric_card("CMC", "-- (aperte Processar)", "16px")
         self.card_ctc = self.create_numeric_card("CTC", "-- mEq/100g", "24px")
-        self.card_tipo = self.create_numeric_card("TIPO DE ARGILA", "serviço do modelo!", "18px")
+        self.card_tipo = self.create_numeric_card("TIPO DE ARGILA", "--", "18px")
 
         left_panel.addWidget(self.card_cmc)
         left_panel.addWidget(self.card_ctc)
@@ -318,21 +347,32 @@ class MedicaoScreen(QWidget):
 
         chart_view_molar = QChartView(self.chart_molar)
         chart_view_molar.setRenderHint(QPainter.Antialiasing)
+        self.chart_view_molar = chart_view_molar
         chart_layout.addWidget(chart_view_molar)
 
         body_layout.addLayout(left_panel, stretch=35)
         body_layout.addWidget(chart_frame, stretch=65)
         return pagina
 
-    # ── Controle de Estado (chamado pelo main.py) ───────────────────────
     def mostrar_estado_inicial(self):
         self.stack_estados.setCurrentIndex(self.ESTADO_INICIAL)
         self.btn_parar.setEnabled(False)
         self.btn_processar.setEnabled(False)
         self.btn_salvar.setEnabled(False)
+        self.btn_iniciar.setEnabled(False)
+
+    def mostrar_estado_coleta_aguardando(self):
+        """Troca pra tela de coleta, mas aquisição ainda NÃO começou."""
+        self.stack_estados.setCurrentIndex(self.ESTADO_COLETA)
+        self.btn_iniciar.setEnabled(True)
+        self.btn_parar.setEnabled(False)
+        self.btn_processar.setEnabled(False)
+        self.btn_salvar.setEnabled(False)
 
     def mostrar_estado_coleta(self):
+        """Chamado por app_instance.iniciar_teste() -- aquisição já começou."""
         self.stack_estados.setCurrentIndex(self.ESTADO_COLETA)
+        self.btn_iniciar.setEnabled(False)
         self.btn_parar.setEnabled(True)
         self.btn_processar.setEnabled(False)
         self.btn_salvar.setEnabled(False)
@@ -343,7 +383,6 @@ class MedicaoScreen(QWidget):
         self.btn_processar.setEnabled(True)
         self.btn_salvar.setEnabled(True)
 
-    # ── Auxiliar para Criação Dinâmica dos Cards Numéricos ──────────────
     def create_numeric_card(self, title, initial_value, font_size):
         frame = QFrame()
         frame.setStyleSheet(
@@ -369,7 +408,6 @@ class MedicaoScreen(QWidget):
         setattr(self, f"lbl_{title.lower().replace(' ', '_').replace('çã', 'ca')}", val_lbl)
         return frame
 
-    # ── Interface Pública chamada pelo main.py ──────────────────────────
     @Slot(float, float)
     def add_point(self, tempo, condutividade):
         self.series.append(tempo, condutividade)
@@ -383,7 +421,6 @@ class MedicaoScreen(QWidget):
                 self.axis_y.setMax(condutividade * 1.1)
 
     def reiniciar_graficos(self):
-        """Limpa os dois gráficos -- chamado ao iniciar um novo ensaio."""
         self.series.clear()
         self.axis_x.setRange(0, 10)
         self.axis_y.setRange(0, 10)
@@ -401,48 +438,41 @@ class MedicaoScreen(QWidget):
     def atualizar_volume_total(self, volume_mL):
         self.lbl_volume_total_adicionado.setText(f"{volume_mL:.2f} mL")
 
-    def plotar_ajuste_cmc_joao(self, resultado_joelho, interseccao):
+    def plotar_resultado_cmc(self, resultado):
         """
-        Atualiza o gráfico mostrando as duas retas (pré e pós joelho)
-        e o ponto de intersecção que define a CMC.
+        Atualiza o gráfico de Condutividade Molar × Concentração Molar
+        com o resultado de detectar_cmc_joao_original(): TODOS os pontos
+        medidos, os pontos que fazem parte do trecho linear identificado
+        (destacados em verde) e a reta única ajustada nesse trecho
+        (linha tracejada).
+
+        Isso substitui o antigo plotar_ajuste_cmc_joao(), que esperava
+        DUAS retas (pré/pós-micelização) -- o método fiel ao João só
+        ajusta UMA reta, no trecho final da curva (ver
+        services/analises.py: detectar_cmc_joao_original).
         """
-        concentracoes = resultado_joelho["concentracoes"]
-        omegas = resultado_joelho["omegas"]
-        indice_joelho = resultado_joelho["indice_joelho"]
-        
-        # Limpa séries antigas
+        concentracoes = resultado["concentracoes"]
+        omegas = resultado["omegas"]
+        x_trecho = resultado["x_trecho"]
+        y_trecho = resultado["y_trecho"]
+        a, b = resultado["reta"]
+
         self.series_titulacao_todos.clear()
         self.series_titulacao_linear.clear()
         self.series_ajuste_rls.clear()
 
-        # 1. Plotar todos os pontos originais
         for c, o in zip(concentracoes, omegas):
             self.series_titulacao_todos.append(float(c), float(o))
 
-        # 2. Desenhar Reta 1 (Pré-micelização)
-        a1, b1 = interseccao["reta_pre"]
-        c_pre_ini = float(concentracoes[0])
-        c_pre_fim = float(concentracoes[indice_joelho - 1])
-        # Criamos uma série temporária ou apenas usamos a RLS para a reta 1
-        # Para simplificar, vou usar a series_ajuste_rls como a Reta 1 e 
-        # sugerir adicionar uma segunda série de linha se desejar.
-        # Aqui, desenharemos as retas de intersecção:
-        
-        # Reta Pré
-        self.series_ajuste_rls.append(c_pre_ini, a1 * c_pre_ini + b1)
-        self.series_ajuste_rls.append(c_pre_fim, a1 * c_pre_fim + b1)
+        for c, o in zip(x_trecho, y_trecho):
+            self.series_titulacao_linear.append(float(c), float(o))
 
-        # 3. Desenhar Reta 2 (Pós-micelização)
-        a2, b2 = interseccao["reta_pos"]
-        c_pos_ini = float(concentracoes[indice_joelho])
-        c_pos_fim = float(concentracoes[-1])
-        
-        # Como o QLineSeries conecta os pontos, adicionaremos um ponto "quebra"
-        # para que a série não trace uma linha entre o fim da reta 1 e início da reta 2
-        self.series_ajuste_rls.append(c_pos_ini, a2 * c_pos_ini + b2)
-        self.series_ajuste_rls.append(c_pos_fim, a2 * c_pos_fim + b2)
+        # Desenha a reta ao longo de todo o trecho linear identificado
+        c_ini = float(x_trecho[0])
+        c_fim = float(x_trecho[-1])
+        self.series_ajuste_rls.append(c_ini, a * c_ini + b)
+        self.series_ajuste_rls.append(c_fim, a * c_fim + b)
 
-        # Ajuste de eixos
         self.axis_molar_x.setRange(0, float(concentracoes.max()) * 1.1)
         self.axis_molar_y.setRange(0, float(omegas.max()) * 1.1)
 
@@ -450,6 +480,11 @@ class MedicaoScreen(QWidget):
         self.lbl_cmc.setText(f"{cmc:.6f} mol/L")
         self.lbl_ctc.setText(f"{ctc:.2f} mEq/100g")
         self.lbl_tipo_de_argila.setText(tipo_argila)
+
+        # Guarda pra usar no cabeçalho do relatório exportado (exportar_relatorio)
+        self._ultimo_cmc = cmc
+        self._ultimo_ctc = ctc
+        self._ultimo_tipo = tipo_argila
 
     def get_button_style(self, is_action=False):
         if is_action:
@@ -463,3 +498,124 @@ class MedicaoScreen(QWidget):
             QPushButton:pressed {{ background-color: {HEX_SURFACE_PRES}; }}
             QPushButton:disabled {{ color: #B0B0B0; background-color: #EDEDEB; }}
         """
+
+    # ────────────────────────────────────────────────────────────────
+    # Exportação de relatório (botão "Salvar")
+    # ────────────────────────────────────────────────────────────────
+    def exportar_relatorio(self):
+        """
+        Exporta o gráfico de CMC (Condutividade Molar × Concentração
+        Molar) junto com os valores calculados -- parecido com o
+        relatório que o equipamento do João gerava (Apêndice C da
+        dissertação: "Modelo de Relatório Criado pelo Dispositivo de
+        Monitoramento"). Suporta PNG (imagem simples do gráfico) ou
+        PDF (relatório com cabeçalho: data, massa, CMC, CTC, tipo).
+
+        NOTA: não tenho o layout exato do Apêndice C (é uma figura na
+        dissertação, não texto que eu tenha em mãos) -- montei um
+        cabeçalho equivalente e razoável. Se você tiver o modelo real,
+        me manda que eu ajusto o layout do PDF pra bater certinho.
+        """
+        if self.stack_estados.currentIndex() != self.ESTADO_FINALIZADO:
+            QMessageBox.warning(
+                self, "Nada para exportar",
+                "Processe um ensaio (botão 'Processar') antes de exportar o relatório."
+            )
+            return
+
+        if not hasattr(self, "_ultimo_cmc"):
+            QMessageBox.warning(
+                self, "Nada para exportar",
+                "Ainda não há um resultado calculado nesta amostra."
+            )
+            return
+
+        nome_sugerido = f"ensaio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        caminho, filtro = QFileDialog.getSaveFileName(
+            self, "Exportar relatório do ensaio", nome_sugerido,
+            "Relatório PDF (*.pdf);;Imagem PNG (*.png)"
+        )
+        if not caminho:
+            return
+
+        try:
+            if caminho.lower().endswith(".png") or "PNG" in filtro:
+                if not caminho.lower().endswith(".png"):
+                    caminho += ".png"
+                self._exportar_png(caminho)
+            else:
+                if not caminho.lower().endswith(".pdf"):
+                    caminho += ".pdf"
+                self._exportar_pdf(caminho)
+        except Exception as erro:
+            QMessageBox.critical(self, "Erro ao exportar", f"Não foi possível salvar o relatório.\n\nDetalhe: {erro}")
+            return
+
+        QMessageBox.information(self, "Exportado", f"Relatório salvo em:\n{caminho}")
+
+    def _exportar_png(self, caminho):
+        """Exporta só a imagem do gráfico, sem cabeçalho."""
+        pixmap = self.chart_view_molar.grab()
+        if not pixmap.save(caminho, "PNG"):
+            raise IOError(f"Falha ao salvar PNG em {caminho}")
+
+    def _exportar_pdf(self, caminho):
+        """Exporta um relatório em PDF: cabeçalho com os valores calculados + o gráfico."""
+        writer = QPdfWriter(caminho)
+        writer.setPageSize(QPageSize(QPageSize.A4))
+        writer.setResolution(150)
+
+        painter = QPainter(writer)
+        try:
+            largura_pagina = painter.viewport().width()
+            altura_pagina = painter.viewport().height()
+            margem = int(largura_pagina * 0.06)
+
+            y = margem
+
+            fonte_titulo = QFont("Sans-Serif", 16, QFont.Bold)
+            painter.setFont(fonte_titulo)
+            painter.drawText(margem, y, "Relatório de Ensaio -- CTC via CMC")
+            y += int(fonte_titulo.pointSize() * 3.0)
+
+            fonte_corpo = QFont("Sans-Serif", 11)
+            painter.setFont(fonte_corpo)
+            linhas_cabecalho = [
+                f"Data/hora: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}",
+                f"Massa da amostra: {self.massa_amostra_g:.1f} g" if self.massa_amostra_g else "Massa da amostra: --",
+                f"CMC: {self._ultimo_cmc:.6f} mol/L",
+                f"CTC: {self._ultimo_ctc:.2f} mEq/100g",
+                f"Classificação: {self._ultimo_tipo}",
+            ]
+            espacamento_linha = int(fonte_corpo.pointSize() * 2.6)
+            for linha in linhas_cabecalho:
+                painter.drawText(margem, y, linha)
+                y += espacamento_linha
+
+            y += margem // 2
+
+            # Desenha o gráfico logo abaixo do cabeçalho, ocupando o
+            # restante da página, mantendo a proporção original.
+            pixmap = self.chart_view_molar.grab()
+            area_disponivel = QRectF(
+                margem, y,
+                largura_pagina - 2 * margem,
+                altura_pagina - y - margem,
+            )
+            proporcao_pixmap = pixmap.width() / pixmap.height()
+            proporcao_area = area_disponivel.width() / area_disponivel.height()
+
+            if proporcao_pixmap > proporcao_area:
+                largura_final = area_disponivel.width()
+                altura_final = largura_final / proporcao_pixmap
+            else:
+                altura_final = area_disponivel.height()
+                largura_final = altura_final * proporcao_pixmap
+
+            destino = QRectF(
+                area_disponivel.left(), area_disponivel.top(),
+                largura_final, altura_final,
+            )
+            painter.drawPixmap(destino, pixmap, QRectF(pixmap.rect()))
+        finally:
+            painter.end()

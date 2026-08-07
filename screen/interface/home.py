@@ -6,21 +6,19 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QFont, QPalette, QColor
 
-# ════════════════════════════════════════════════════════════════════════════
-# DIRETRIZES DE DESIGN & PALETA ISA-101 (Convertido para Hex/QSS)
-# ════════════════════════════════════════════════════════════════════════════
-HEX_BG           = "#F5F5F3"  # Fundo neutro dominante (~90%)
-HEX_SURFACE      = "#FFFFFF"  # Cards e botões secundários
-HEX_SURFACE_PRES = "#EBEEF2"  # Feedback de toque sutil
-HEX_BORDER       = "#D1D1CD"  # Linhas técnicas finas
 
-HEX_TEXT         = "#212121"  # Leitura principal
-HEX_TEXT_MUTED   = "#6B6B6B"  # Dados de apoio
+HEX_BG           = "#F5F5F3" 
+HEX_SURFACE      = "#FFFFFF" 
+HEX_SURFACE_PRES = "#EBEEF2"  
+HEX_BORDER       = "#D1D1CD"  
 
-HEX_ACTION       = "#2E5284"  # Única ação primária
+HEX_TEXT         = "#212121" 
+HEX_TEXT_MUTED   = "#6B6B6B"
+
+HEX_ACTION       = "#2E5284"
 HEX_ACTION_PRES  = "#1F375B"
 
-# Estados Fixos do Sistema
+
 HEX_NORMAL       = "#6B6B6B"
 HEX_OK           = "#2E7D32"
 HEX_WARN         = "#B78103"
@@ -28,10 +26,7 @@ HEX_ALARM        = "#C62828"
 
 
 class SCADAButton(QPushButton):
-    """
-    Botão industrial robusto otimizado para telas touchscreen de 7 polegadas.
-    Design retilíneo técnico e alto contraste.
-    """
+ 
     def __init__(self, text, is_primary=False, parent=None):
         super().__init__(text, parent)
         self.is_primary = is_primary
@@ -41,16 +36,13 @@ class SCADAButton(QPushButton):
 
 
 class StatusPill(QWidget):
-    """
-    Indicador de estado técnico associando Cor + Texto (Redundância p/ Daltonismo)
-    """
+
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 0, 8, 0)
         layout.setSpacing(8)
         
-        # Indicador visual geométrico (LED simulado)
         self.led = QLabel("●")
         self.led.setFont(QFont("Sans-Serif", 14, QFont.Bold))
         
@@ -80,7 +72,7 @@ class HomeScreen(QWidget):
         main_layout.setContentsMargins(16, 12, 16, 12)
         main_layout.setSpacing(14)
         
-        # ── TOPO: Barra de Status Técnica ─────────────────────────────────────
+
         top_layout = QHBoxLayout()
         self.status_pill = StatusPill()
         
@@ -93,22 +85,16 @@ class HomeScreen(QWidget):
         top_layout.addWidget(self.clock_lbl)
         main_layout.addLayout(top_layout)
         
-        # Divisor Superior
+
         main_layout.addWidget(self.create_divider())
         
-        # ── CORPO: Área Gráfica / Display Central ──────────────────────────────
-        # Substitui o "Image" vago por um placeholder técnico estruturado
-  
-        
-        # ── INFERIOR: Painel de Ações Instrumentais ───────────────────────────
         button_layout = QHBoxLayout()
         button_layout.setSpacing(12)
         
         self.btn_measure = SCADAButton("⚡ INICIAR MEDIÇÃO", is_primary=True)
         self.btn_history = SCADAButton("📊 HISTÓRICO", is_primary=False)
-        self.btn_config  = SCADAButton("⚙️ CONFIGURAÇÃO", is_primary=False)
+        self.btn_config  = SCADAButton("⚙️ CALIBRAR SENSOR", is_primary=False)
         
-        # Conexões de eventos de clique
         self.btn_measure.clicked.connect(self.app_app.acao_iniciar_medicao)
         self.btn_history.clicked.connect(self.app_app.acao_historico)
         self.btn_config.clicked.connect(self.app_app.acao_configuracoes)
@@ -118,10 +104,8 @@ class HomeScreen(QWidget):
         button_layout.addWidget(self.btn_config, stretch=3)
         main_layout.addLayout(button_layout)
         
-        # Divisor Inferior
         main_layout.addWidget(self.create_divider())
         
-        # Rodapé / Instrução Operacional
         footer_lbl = QLabel("AGUARDANDO COMANDO DO OPERADOR")
         footer_lbl.setFont(QFont("Sans-Serif", 9))
         footer_lbl.setStyleSheet(f"color: {HEX_TEXT_MUTED};")
@@ -141,16 +125,13 @@ class SCADAApplication(QMainWindow):
         super().__init__()
         self.setWindowTitle("SCADA Lab Interface")
         
-        # Dimensões fixas para a tela touchscreen de 7" do Raspberry Pi (Tipicamente 800x480)
         self.setFixedSize(800, 480)
-        
-        # Centralizar Widget Principal
+
         self.home_screen = HomeScreen(app_instance=self)
         self.setCentralWidget(self.home_screen)
         
         self.setStyleSheet(self.get_stylesheet())
         
-        # Timer de Atualização do Relógio Técnico
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_clock)
         self.timer.start(1000)
@@ -160,7 +141,6 @@ class SCADAApplication(QMainWindow):
         time_str = QTime.currentTime().toString("hh:mm:ss")
         self.home_screen.clock_lbl.setText(time_str)
 
-    # ── Mapeamento de Funções do App Original ───────────────────────────────
     @Slot()
     def acao_iniciar_medicao(self):
         print("[SINAL] Comando de medição enviado ao hardware.")
@@ -210,11 +190,9 @@ class SCADAApplication(QMainWindow):
         """
 
 if __name__ == "__main__":
-    # Otimizações de renderização para o hardware do Raspberry Pi 3
     os_flags = ["-platform", "eglfs"] if hasattr(sys, "frozen") else []
     app = QApplication(sys.argv + os_flags)
     
     window = SCADAApplication()
-    # Opcional para o RPi operando em modo Kiosk: window.showFullScreen()
     window.show()
     sys.exit(app.exec())

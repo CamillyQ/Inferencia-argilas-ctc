@@ -205,4 +205,32 @@ CREATE TABLE IF NOT EXISTS configuracoes (
 conn.commit()
 conn.close()
 
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS ensaios_cmc (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+    amostra_id INTEGER NOT NULL,
+
+    data_ensaio TEXT NOT NULL,      -- ISO 8601 (datetime.now().isoformat())
+
+    massa_amostra_g REAL NOT NULL,
+
+    cmc REAL,                       -- mol/L
+    omega_cmc REAL,                 -- S.cm2/mol
+    ctc REAL,                       -- mEq/100g
+    classificacao TEXT,
+
+    indice_joelho INTEGER,
+    r2_pre REAL,
+    r2_pos REAL,
+    reta_pre_a REAL,
+    reta_pre_b REAL,
+    reta_pos_a REAL,
+    reta_pos_b REAL,
+
+    FOREIGN KEY(amostra_id)
+    REFERENCES amostras(id)
+)
+""")
+
 print("Banco criado com sucesso.")
