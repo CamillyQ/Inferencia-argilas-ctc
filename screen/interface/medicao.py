@@ -336,7 +336,7 @@ class MedicaoScreen(QWidget):
         self.chart_molar.addAxis(self.axis_molar_x, Qt.AlignBottom)
 
         self.axis_molar_y = QValueAxis()
-        self.axis_molar_y.setTitleText("Condutividade molar Ω (µS·cm²/mol)")
+        self.axis_molar_y.setTitleText("Condutividade molar Ω (S·cm²/mol)")
         self.axis_molar_y.setLabelFormat("%.1f")
         self.axis_molar_y.setRange(0, 1)
         self.chart_molar.addAxis(self.axis_molar_y, Qt.AlignLeft)
@@ -428,7 +428,8 @@ class MedicaoScreen(QWidget):
         self.series_titulacao_todos.clear()
         self.series_titulacao_linear.clear()
         self.series_ajuste_rls.clear()
-
+        if hasattr(self, "_ultimo_cmc"):
+            del self._ultimo_cmc
         self.lbl_volume_total_adicionado.setText("0.00 mL")
         self.lbl_leituras_recebidas.setText("0")
         self.lbl_cmc.setText("-- (aperte Processar)")
@@ -446,10 +447,6 @@ class MedicaoScreen(QWidget):
         (destacados em verde) e a reta única ajustada nesse trecho
         (linha tracejada).
 
-        Isso substitui o antigo plotar_ajuste_cmc_joao(), que esperava
-        DUAS retas (pré/pós-micelização) -- o método fiel ao João só
-        ajusta UMA reta, no trecho final da curva (ver
-        services/analises.py: detectar_cmc_joao_original).
         """
         concentracoes = resultado["concentracoes"]
         omegas = resultado["omegas"]

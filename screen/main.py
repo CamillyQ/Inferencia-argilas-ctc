@@ -5,7 +5,7 @@ from datetime import datetime
 from time import perf_counter
 
 from PySide6.QtCore import Qt, QTimer, Slot
-from PySide6.QtWidgets import QApplication, QMainWindow, QStackedWidget
+from PySide6.QtWidgets import QApplication, QMainWindow, QStackedWidget, QMessageBox
 
 from services.arduino import ArduinoService
 from services.analises import (
@@ -125,6 +125,7 @@ class ScadaApp(QMainWindow):
         self.medicao_screen.lbl_condutividade.setText(f"{condutividade:.2f} µS/cm")
         self.medicao_screen.lbl_leituras_recebidas.setText(str(total_amostras))
         self.medicao_screen.add_point(tempo, condutividade)
+        print(f"PPM={leitura[0]} | CONDUTIVIDADE={leitura[1]} uS/cm")
 
     # ── Titulação manual (botão "Registrar Adição", só existe no Estado Coleta) ─
     @Slot(float)
@@ -174,6 +175,10 @@ class ScadaApp(QMainWindow):
 
         except Exception as erro:
             print(f"[PROCESSAMENTO] Erro ao processar CMC/CTC: {erro}")
+            QMessageBox.critical(
+                self, "Erro ao processar",
+                f"Não foi possível calcular a CMC/CTC desta amostra.\n\nDetalhe: {erro}"
+            )
             return
 
     # ── Transições de estado ────────────────────────────────────────────

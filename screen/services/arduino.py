@@ -72,7 +72,7 @@ if __name__ == "__main__":
 
 class ArduinoService:
 
-    def __init__(self, porta=None, baudrate=9600):
+    def __init__(self, porta=None, baudrate=115200):
 
         if porta is None:
             porta = detectar_arduino()
@@ -131,21 +131,18 @@ class ArduinoService:
             valor = float(match.group(1))
             unidade = match.group(2)
 
-            ##############################################
+
 
             if unidade == "ppm":
 
                 self.ppm = valor
                 self.tem_ppm = True
 
-            ##############################################
 
             elif unidade == "uS/cm":
 
                 self.condutividade = valor
                 self.tem_condutividade = True
-
-            ##############################################
 
             # Só devolve quando possui os DOIS valores
 
@@ -163,13 +160,10 @@ class ArduinoService:
 
         return None
 
-    ######################################################
-
     def limpar_buffer(self):
 
         self.conexao.reset_input_buffer()
 
-    ######################################################
 
     def fechar(self):
 

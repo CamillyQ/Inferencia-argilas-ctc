@@ -18,6 +18,13 @@ def calcular_concentracao_molar(volume_acumulado_mL, ct_g_l=CT_G_L, mm_g_mol=MM_
     mols = massa_tensoativo_g / mm_g_mol
     return mols / va_l
 
+def concentracao_para_volume(concentracao_molar, ct_g_l=CT_G_L, mm_g_mol=MM_G_MOL, va_l=VA_L):
+    """Função inversa: converte Molaridade (mol/L) de volta para Volume (mL)."""
+    if concentracao_molar <= 0:
+        return 0.0
+    mols = concentracao_molar * va_l
+    massa_g = mols * mm_g_mol
+    return (massa_g / ct_g_l) * 1000.0
 
 def detectar_cmc_joao_original(pontos_titulacao, limiar_linearidade=10.0):
     """
@@ -63,7 +70,9 @@ def detectar_cmc_joao_original(pontos_titulacao, limiar_linearidade=10.0):
     concentracoes = np.array([p["concentracao_molar"] for p in pontos_validos])
     volumes_mL = np.array([p["volume_acumulado_mL"] for p in pontos_validos])
     condutividades = np.array([p["condutividade"] for p in pontos_validos])
-    omegas = condutividades / concentracoes
+    omegas = (condutividades * 1e-3) / concentracoes
+
+    concentracoes, omegas = limpar_outliers_titulacao(concentracoes, omegas)
 
     trecho_linear = None
     for i in range(2, len(concentracoes) + 1):
@@ -108,8 +117,8 @@ def cmc_para_ctc(volume_no_corte_mL, massa_amostra_g, normalidade_titulante=0.01
     # CTC = (V_titulante * N_titulante * 100) / massa_amostra
     return (volume_no_corte_mL * normalidade_titulante * 100) / massa_amostra_g
 
-def calcular_ctc_final(interseccao_cmc, massa_amostra):
-    volume_exato = concentracao_para_volume(interseccao_cmc['x_cmc'])
+def calcular_ctc_final(resultado_cmc, massa_amostra):
+    volume_exato = resultado_cmc["volume_cmc_mL"]
   
     resultado = cmc_para_ctc(
         volume_no_corte_mL=volume_exato, 

@@ -57,10 +57,6 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QSizePolicy
 
-
-# ---------------------------------------------------------------------
-# Paleta (mesma usada em historico.py / demais telas)
-# ---------------------------------------------------------------------
 COR_FUNDO = "#EDEDED"
 COR_PAINEL = "#F7F7F7"
 COR_BORDA = "#C7C7C7"
