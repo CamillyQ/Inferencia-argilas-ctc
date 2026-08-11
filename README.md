@@ -21,9 +21,11 @@ Antes de iniciar, certifique-se de ter os seguintes recursos instalados no compu
 * [Python 3.x](https://www.python.org/downloads/)
 * [Git](https://git-scm.com/) (ou GitHub Desktop)
 
-------------DEVELOPMENT MODE------------
+## DEVELOPMENT MODE
+
 
 Para rodar este programa no seu computador, siga os passos abaixo:
+
 
 Etapa 1  - Clone o repositório usando git bash ou github desktop
 Etapa 2 - Abra o terminal (em uma IDE ou no próprio SO) e navegue até a pasta do projeto
