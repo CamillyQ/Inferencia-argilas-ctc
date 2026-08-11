@@ -30,11 +30,11 @@ Para rodar este programa no seu computador, siga os passos abaixo:
 * Etapa 2 - Abra o terminal (em uma IDE ou no próprio SO) e navegue até a pasta do projeto
 * Etapa 3 - Crie um ambiente virtual na pasta do projeto seguindo estes passos:
 
-* ------Windows------
+-----------------------------------------------------------Windows---------------------------------------------------------------------------------------
 *  Digite python -m venv venv
 *  Ative com venv/Scripts/Activate.bat (para o prompt de comando) ou /Activate.ps1 (para powershell)
 
-* -------Linux-------
+------------------------------------------------------------Linux----------------------------------------------------------------------------------------
 
 *  Digite python -m venv venv
 *  Digite source venv/bin/activate
