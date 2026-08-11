@@ -23,8 +23,7 @@ Antes de iniciar, certifique-se de ter os seguintes recursos instalados no compu
 
 ## DEVELOPMENT MODE
 
-
-* Para rodar este programa no seu computador, siga os passos abaixo:
+Para rodar este programa no seu computador, siga os passos abaixo:
 
 
 * Etapa 1  - Clone o repositório usando git bash ou github desktop
@@ -32,13 +31,13 @@ Antes de iniciar, certifique-se de ter os seguintes recursos instalados no compu
 * Etapa 3 - Crie um ambiente virtual na pasta do projeto seguindo estes passos:
 
 * ------Windows------
-* 1 - Digite python -m venv venv
-* 2 - Ative com venv/Scripts/Activate.bat (para o prompt de comando) ou /Activate.ps1 (para powershell)
+*  Digite python -m venv venv
+*  Ative com venv/Scripts/Activate.bat (para o prompt de comando) ou /Activate.ps1 (para powershell)
 
 * -------Linux-------
 
-* 1 - Digite python -m venv venv
-* 2 - Digite source venv/bin/activate
+*  Digite python -m venv venv
+*  Digite source venv/bin/activate
 
 * Etapa 4 - Instale os pacotes necessários com o comando pip install -r requirements.txt
 
