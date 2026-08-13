@@ -72,7 +72,7 @@ if __name__ == "__main__":
 
 class ArduinoService:
 
-    def __init__(self, porta=None, baudrate=115200):
+    def __init__(self, porta=None, baudrate=9600):
 
         if porta is None:
             porta = detectar_arduino()

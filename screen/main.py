@@ -54,6 +54,18 @@ class ScadaApp(QMainWindow):
 
         self.setup_timers()
 
+        if not self.arduino.conectado:
+            QTimer.singleShot(300, self._notificar_arduino_ausente)
+
+    def _notificar_arduino_ausente(self):
+        QMessageBox.warning(
+            self,
+            "Arduino Não Conectado",
+            "Nenhum Arduino foi detectado na porta USB.\n\n"
+            "O sistema abrirá normalmente em modo de visualização, "
+            "mas as leituras e ensaios estarão desabilitados."
+        )
+
     def setup_timers(self):
         self.timer_tick = QTimer(self)
         self.timer_tick.timeout.connect(self._tick)
@@ -185,6 +197,13 @@ class ScadaApp(QMainWindow):
     @Slot(float)
     def iniciar_teste(self, massa_amostra_g):
         """Estado Inicial -> Estado Coleta (aquisição real começa aqui)."""
+        if not self.arduino.conectado:
+            QMessageBox.critical(
+                self,
+                "Erro de Conexão",
+                "Não é possível iniciar o teste sem um Arduino conectado."
+            )
+            return
         self.massa_amostra_g = massa_amostra_g
         self.coletando = True
         self.pontos = []
@@ -236,6 +255,7 @@ class ScadaApp(QMainWindow):
         dialog.exec()
 
     @Slot()
+    #definir aqui o qlialog
     def voltar_home(self):
         self.screen_manager.setCurrentWidget(self.home_screen)
 

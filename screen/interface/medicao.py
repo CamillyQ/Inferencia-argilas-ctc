@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
+import os
 from PySide6.QtCore import Qt, Slot, QRectF
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -84,7 +83,7 @@ class MedicaoScreen(QWidget):
 
         self.btn_parar.clicked.connect(self.app_app.parar_teste)
         self.btn_processar.clicked.connect(self.app_app.detectar_cmc)
-        self.btn_voltar.clicked.connect(self.app_app.voltar_home)
+        self.btn_voltar.clicked.connect(self._on_voltar_clicado)
         self.btn_iniciar.clicked.connect(self._on_iniciar_clicado)
         self.btn_salvar.clicked.connect(self.exportar_relatorio)
 
@@ -168,6 +167,34 @@ class MedicaoScreen(QWidget):
         da aquisição, usando a massa salva no passo anterior.
         """
         self.app_app.iniciar_teste(self.massa_amostra_g)
+
+    def _on_voltar_clicado(self):
+        # Na tela inicial não tem nada em andamento -- sai direto, sem perguntar
+        if self.stack_estados.currentIndex() == self.ESTADO_INICIAL:
+            self.app_app.voltar_home()
+            return
+
+        resposta = QMessageBox.question(
+            self,
+            "Descartar medição?",
+            "Você tem uma medição em andamento (ou recém-concluída) que ainda "
+            "não foi salva/exportada.\n\n"
+            "Se voltar agora, todos os dados desta medição serão perdidos.\n\n"
+            "Deseja realmente descartar e voltar?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,  # padrão seguro -- nunca descarta sem confirmação explícita
+        )
+        if resposta != QMessageBox.Yes:
+            return
+
+        # Se ainda estava coletando de verdade (não só na tela de espera),
+        # para o Arduino com segurança antes de sair -- não deixa o
+        # equipamento "titulando sozinho" sem ninguém olhando.
+        if self.app_app.coletando:
+            self.app_app.parar_teste()
+
+        self.app_app.novo_ensaio()  # reseta massa/pontos/titulação
+        self.app_app.voltar_home()
 
     def _build_pagina_coleta(self):
         pagina = QWidget()
@@ -500,27 +527,15 @@ class MedicaoScreen(QWidget):
     # Exportação de relatório (botão "Salvar")
     # ────────────────────────────────────────────────────────────────
     def exportar_relatorio(self):
-        """
-        Exporta o gráfico de CMC (Condutividade Molar × Concentração
-        Molar) junto com os valores calculados -- parecido com o
-        relatório que o equipamento do João gerava (Apêndice C da
-        dissertação: "Modelo de Relatório Criado pelo Dispositivo de
-        Monitoramento"). Suporta PNG (imagem simples do gráfico) ou
-        PDF (relatório com cabeçalho: data, massa, CMC, CTC, tipo).
-
-        NOTA: não tenho o layout exato do Apêndice C (é uma figura na
-        dissertação, não texto que eu tenha em mãos) -- montei um
-        cabeçalho equivalente e razoável. Se você tiver o modelo real,
-        me manda que eu ajusto o layout do PDF pra bater certinho.
-        """
+    
         if self.stack_estados.currentIndex() != self.ESTADO_FINALIZADO:
             QMessageBox.warning(
-                self, "Nada para exportar",
+                self, "Exportação indisponível",
                 "Processe um ensaio (botão 'Processar') antes de exportar o relatório."
             )
             return
 
-        if not hasattr(self, "_ultimo_cmc"):
+        if not hasattr(self, "_ultimo_cmc") or self._ultimo_cmc is None:
             QMessageBox.warning(
                 self, "Nada para exportar",
                 "Ainda não há um resultado calculado nesta amostra."
@@ -544,10 +559,24 @@ class MedicaoScreen(QWidget):
                 if not caminho.lower().endswith(".pdf"):
                     caminho += ".pdf"
                 self._exportar_pdf(caminho)
+
         except Exception as erro:
             QMessageBox.critical(self, "Erro ao exportar", f"Não foi possível salvar o relatório.\n\nDetalhe: {erro}")
-            return
 
+        except PermissionError:
+            self._limpar_arquivo_corrompido(caminho)
+            QMessageBox.critical(
+                self, "Erro de permissão",
+                f"Não foi possível salvar em:\n{caminho}\n\n"
+                "Verifique se o arquivo já está aberto em outro programa ou a pasta possui permissão de escrita"
+            )
+        except OSError as e:
+            self._limpar_arquivo_corrompido(caminho)
+            QMessageBox.critical(
+            self, "Erro de Armazenamento",
+            f"Falha de gravação no sistema de arquivos do Raspberry Pi.\n\nDetalhes: {e}"
+            )
+        
         QMessageBox.information(self, "Exportado", f"Relatório salvo em:\n{caminho}")
 
     def _exportar_png(self, caminho):
@@ -556,18 +585,33 @@ class MedicaoScreen(QWidget):
         if not pixmap.save(caminho, "PNG"):
             raise IOError(f"Falha ao salvar PNG em {caminho}")
 
+    def _limpar_arquivo_corrompido(self, caminho):
+        """Garante que nenhum arquivo zerado ou incompleto permaneça no disco."""
+        if os.path.exists(caminho) and os.path.getsize(caminho) == 0:
+            try:
+                os.remove(caminho)
+            except OSError:
+                pass
+
+
     def _exportar_pdf(self, caminho):
-        """Exporta um relatório em PDF: cabeçalho com os valores calculados + o gráfico."""
+        # Captura a imagem do gráfico antes de abrir a gravação de arquivo
+        pixmap = self.chart_view_molar.grab()
+        if pixmap.isNull() or pixmap.width() == 0:
+            raise RuntimeError("Não foi possível renderizar a imagem do gráfico.")
+
         writer = QPdfWriter(caminho)
         writer.setPageSize(QPageSize(QPageSize.A4))
         writer.setResolution(150)
 
-        painter = QPainter(writer)
+        painter = QPainter()
+        if not painter.begin(writer):
+            raise OSError("Falha ao inicializar o motor de impressão PDF no arquivo de destino.")
+
         try:
             largura_pagina = painter.viewport().width()
             altura_pagina = painter.viewport().height()
             margem = int(largura_pagina * 0.06)
-
             y = margem
 
             fonte_titulo = QFont("Sans-Serif", 16, QFont.Bold)
@@ -591,13 +635,11 @@ class MedicaoScreen(QWidget):
 
             y += margem // 2
 
-            # Desenha o gráfico logo abaixo do cabeçalho, ocupando o
-            # restante da página, mantendo a proporção original.
-            pixmap = self.chart_view_molar.grab()
+
             area_disponivel = QRectF(
                 margem, y,
                 largura_pagina - 2 * margem,
-                altura_pagina - y - margem,
+                altura_pagina - y - margem
             )
             proporcao_pixmap = pixmap.width() / pixmap.height()
             proporcao_area = area_disponivel.width() / area_disponivel.height()
@@ -611,7 +653,7 @@ class MedicaoScreen(QWidget):
 
             destino = QRectF(
                 area_disponivel.left(), area_disponivel.top(),
-                largura_final, altura_final,
+                largura_final, altura_final
             )
             painter.drawPixmap(destino, pixmap, QRectF(pixmap.rect()))
         finally:
