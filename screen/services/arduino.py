@@ -73,90 +73,79 @@ if __name__ == "__main__":
 class ArduinoService:
 
     def __init__(self, porta=None, baudrate=9600):
+        self.conexao = None
+        self.conectado = False
+        self.ppm = None
+        self.condutividade = None
+        self.tem_ppm = False
+        self.tem_condutividade = False
+        self.regex = re.compile(r"([0-9.]+)\s*(ppm|uS/cm)")
 
         if porta is None:
             porta = detectar_arduino()
 
         if porta is None:
-            raise RuntimeError("Nenhum Arduino encontrado.")
+            print("[AVISO] Nenhum Arduino encontrado. A aplicação iniciará offline.")
+            return
 
-        self.conexao = serial.Serial(
-            port=porta,
-            baudrate=baudrate,
-            timeout=0.1
-        )
-
-        time.sleep(2)
-
-        print(f"Arduino conectado em {porta}")
-
-        self.regex = re.compile(r"([0-9.]+)\s*(ppm|uS/cm)")
-
-        self.ppm = None
-        self.condutividade = None
-
-        self.tem_ppm = False
-        self.tem_condutividade = False
-
-
-    def enviar(self, comando):
-
-        comando = comando.strip() + "\n"
-
-        self.conexao.write(
-            comando.encode("utf-8")
-        )
-
-    ######################################################
-
-    def ler(self):
-
-        while self.conexao.in_waiting:
-
-            linha = (
-                self.conexao
-                .readline()
-                .decode("utf-8", errors="ignore")
-                .strip()
+        try:
+            self.conexao = serial.Serial(
+                port=porta,
+                baudrate=baudrate,
+                timeout=0.1
             )
+            time.sleep(2)
+            self.conectado = True
+            print(f"Arduino conectado em {porta}")
+        except Exception as e:
+            print(f"[ERRO] Falha ao abrir porta serial {porta}: {e}")
+            self.conexao = None
+            self.conectado = False
 
-            if linha == "":
-                continue
+        def enviar(self, comando):
+            if not self.conectado or not self.conexao:
+                print("[SERIAL] Comando ignorado: Arduino desconectado.")
+                return
 
-            match = self.regex.search(linha)
+            comando = comando.strip() + "\n"
+            self.conexao.write(comando.encode("utf-8"))
 
-            if match is None:
-                continue
+        def ler(self):
+            if not self.conectado or not self.conexao:
+                return None
 
-            valor = float(match.group(1))
-            unidade = match.group(2)
-
-
-
-            if unidade == "ppm":
-
-                self.ppm = valor
-                self.tem_ppm = True
-
-
-            elif unidade == "uS/cm":
-
-                self.condutividade = valor
-                self.tem_condutividade = True
-
-            # Só devolve quando possui os DOIS valores
-
-            if self.tem_ppm and self.tem_condutividade:
-
-                leitura = (
-                    self.ppm,
-                    self.condutividade
+            while self.conexao.in_waiting:
+                linha = (
+                    self.conexao
+                    .readline()
+                    .decode("utf-8", errors="ignore")
+                    .strip()
                 )
 
-                self.tem_ppm = False
-                self.tem_condutividade = False
+                if linha == "":
+                    continue
 
-                return leitura
+                match = self.regex.search(linha)
+
+                if match is None:
+                    continue
+
+                valor = float(match.group(1))
+                unidade = match.group(2)
+
+                if unidade == "ppm":
+                    self.ppm = valor
+                    self.tem_ppm = True
+
+                elif unidade == "uS/cm":
+                    self.condutividade = valor
+                    self.tem_condutividade = True
+
+                if self.tem_ppm and self.tem_condutividade:
+                    leitura = (self.ppm, self.condutividade)
+                    self.tem_ppm = False
+                    self.tem_condutividade = False
+                    return leitura
 
         return None
 
