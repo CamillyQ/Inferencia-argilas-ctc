@@ -28,6 +28,7 @@ def configurar_ambiente_rpi():
 class ScadaApp(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.setWindowTitle("SCADA - Estação de Medição")
         self.setFixedSize(800, 480)
 

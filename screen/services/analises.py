@@ -140,16 +140,14 @@ def classificar_tipo_argila(ctc_meq_100g):
         return "Esmectita/Bentonita (estimado)"
 
 
-def limpar_outliers_titulacao(concentracoes, omegas, tol_subida=2.0):
-    """
-    Filtra pontos anormais onde omega aumenta significativamente 
-    em vez de cair/estabilizar.
-    """
-    x_filt, y_filt = [concentracoes[0]], [omegas[0]]
+def limpar_outliers_titulacao(concentracoes, volumes_mL, omegas, tol_subida=2.0):
+    
+    x_filt, v_filt, y_filt = [concentracoes[0]], [volumes_mL[0]], [omegas[0]]
     
     for i in range(1, len(concentracoes)):
         if omegas[i] <= y_filt[-1] + tol_subida:
             x_filt.append(concentracoes[i])
+            v_filt.append(volumes_mL[i])
             y_filt.append(omegas[i])
             
-    return np.array(x_filt), np.array(y_filt)
+    return np.array(x_filt), np.array(v_filt), np.array(y_filt)

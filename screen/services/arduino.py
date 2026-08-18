@@ -15,13 +15,6 @@ VIDS_CONHECIDOS = {
 def detectar_arduino(verbose=True):
     """
     Procura a porta serial do Arduino.
-
-    Estratégia (nessa ordem):
-      1. VID conhecido (mais confiável -- é o ID do chip, fixo no
-         hardware, funciona igual em qualquer sistema operacional).
-      2. Texto da descrição/fabricante (fallback -- útil quando o VID
-         não está na lista acima, mas é frágil porque o texto muda
-         de formato entre Windows e Linux para o MESMO dispositivo).
     """
     portas = list(list_ports.comports())
 
@@ -35,7 +28,7 @@ def detectar_arduino(verbose=True):
                 f"manuf={p.manufacturer!r} | vid={vid_hex} | pid={pid_hex}"
             )
 
-    # 1) Tenta por VID conhecido primeiro (mais confiável)
+    # 1) Tenta por VID conhecido primeiro
     for porta in portas:
         if porta.vid in VIDS_CONHECIDOS:
             if verbose:
@@ -45,8 +38,7 @@ def detectar_arduino(verbose=True):
                 )
             return porta.device
 
-    # 2) Fallback: texto (mantém compatibilidade com o comportamento
-    #    original no Windows, e cobre chips fora da lista de VIDs)
+    # 2) Fallback: texto da descrição/fabricante
     for porta in portas:
         descricao = (porta.description or "").lower()
         fabricante = (porta.manufacturer or "").lower()
@@ -64,10 +56,6 @@ def detectar_arduino(verbose=True):
     if verbose:
         print("[ARDUINO] Nenhuma porta correspondente encontrada.")
     return None
-
-
-if __name__ == "__main__":
-    print("Porta detectada:", detectar_arduino())
 
 
 class ArduinoService:
@@ -102,63 +90,62 @@ class ArduinoService:
             self.conexao = None
             self.conectado = False
 
-        def enviar(self, comando):
-            if not self.conectado or not self.conexao:
-                print("[SERIAL] Comando ignorado: Arduino desconectado.")
-                return
+    def enviar(self, comando):
+        if not self.conectado or not self.conexao:
+            print("[SERIAL] Comando ignorado: Arduino desconectado.")
+            return
 
-            comando = comando.strip() + "\n"
-            self.conexao.write(comando.encode("utf-8"))
+        comando = comando.strip() + "\n"
+        self.conexao.write(comando.encode("utf-8"))
 
-        def ler(self):
-            if not self.conectado or not self.conexao:
-                return None
+    def ler(self):
+        if not self.conectado or not self.conexao:
+            return None
 
-            while self.conexao.in_waiting:
-                linha = (
-                    self.conexao
-                    .readline()
-                    .decode("utf-8", errors="ignore")
-                    .strip()
-                )
+        while self.conexao.in_waiting:
+            linha = (
+                self.conexao
+                .readline()
+                .decode("utf-8", errors="ignore")
+                .strip()
+            )
 
-                if linha == "":
-                    continue
+            if linha == "":
+                continue
 
-                match = self.regex.search(linha)
+            match = self.regex.search(linha)
 
-                if match is None:
-                    continue
+            if match is None:
+                continue
 
-                valor = float(match.group(1))
-                unidade = match.group(2)
+            valor = float(match.group(1))
+            unidade = match.group(2)
 
-                if unidade == "ppm":
-                    self.ppm = valor
-                    self.tem_ppm = True
+            if unidade == "ppm":
+                self.ppm = valor
+                self.tem_ppm = True
 
-                elif unidade == "uS/cm":
-                    self.condutividade = valor
-                    self.tem_condutividade = True
+            elif unidade == "uS/cm":
+                self.condutividade = valor
+                self.tem_condutividade = True
 
-                if self.tem_ppm and self.tem_condutividade:
-                    leitura = (self.ppm, self.condutividade)
-                    self.tem_ppm = False
-                    self.tem_condutividade = False
-                    return leitura
+            if self.tem_ppm and self.tem_condutividade:
+                leitura = (self.ppm, self.condutividade)
+                self.tem_ppm = False
+                self.tem_condutividade = False
+                return leitura
 
         return None
 
     def limpar_buffer(self):
-
-        self.conexao.reset_input_buffer()
-
+        if self.conexao and self.conexao.is_open:
+            self.conexao.reset_input_buffer()
 
     def fechar(self):
-
-        if self.conexao.is_open:
+        if self.conexao and self.conexao.is_open:
             self.conexao.close()
-            
+            self.conectado = False
+
     def enviar_comando_calibracao(self, comando):
         """
         comando: 'ENTER', 'CAL:707', 'EXIT'
@@ -168,7 +155,6 @@ class ArduinoService:
         
         try:
             self.conexao.reset_input_buffer()
-
             self.conexao.write(f"{comando.upper()}\n".encode('utf-8'))
             
             # Pausa necessária para o Arduino processar e atualizar a EEPROM
@@ -179,3 +165,8 @@ class ArduinoService:
         except Exception as e:
             print(f"[ERRO] Falha ao enviar: {e}")
             return False
+
+
+if __name__ == "__main__":
+    porta_detectada = detectar_arduino()
+    print("Porta detectada:", porta_detectada)
