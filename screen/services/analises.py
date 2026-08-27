@@ -1,4 +1,7 @@
 import numpy as np
+import json
+import joblib
+from pathlib import Path
 
 
 CT_G_L = 3.7       # concentração da solução titulante (g/L)
@@ -26,7 +29,7 @@ def concentracao_para_volume(concentracao_molar, ct_g_l=CT_G_L, mm_g_mol=MM_G_MO
     massa_g = mols * mm_g_mol
     return (massa_g / ct_g_l) * 1000.0
 
-def detectar_cmc_joao_original(pontos_titulacao, limiar_linearidade=10.0):
+def detectar_cmc_joao_original(pontos_titulacao, limiar_linearidade=10.0, tol_subida=2.0):
     """
 
     Como funciona:
@@ -72,7 +75,9 @@ def detectar_cmc_joao_original(pontos_titulacao, limiar_linearidade=10.0):
     condutividades = np.array([p["condutividade"] for p in pontos_validos])
     omegas = (condutividades * 1e-3) / concentracoes
 
-    concentracoes, omegas = limpar_outliers_titulacao(concentracoes, omegas)
+    concentracoes, volumes_mL, omegas = limpar_outliers_titulacao(
+        concentracoes, volumes_mL, omegas, tol_subida=tol_subida
+    )
 
     trecho_linear = None
     for i in range(2, len(concentracoes) + 1):
@@ -118,7 +123,11 @@ def cmc_para_ctc(volume_no_corte_mL, massa_amostra_g, normalidade_titulante=0.01
     return (volume_no_corte_mL * normalidade_titulante * 100) / massa_amostra_g
 
 def calcular_ctc_final(resultado_cmc, massa_amostra):
-    volume_exato = resultado_cmc["volume_cmc_mL"]
+    
+    if "volume_cmc_mL" in resultado_cmc:
+        volume_exato = resultado_cmc["volume_cmc_mL"]
+    else:
+        volume_exato = concentracao_para_volume(resultado_cmc["cmc"])
   
     resultado = cmc_para_ctc(
         volume_no_corte_mL=volume_exato, 
@@ -151,3 +160,93 @@ def limpar_outliers_titulacao(concentracoes, volumes_mL, omegas, tol_subida=2.0)
             y_filt.append(omegas[i])
             
     return np.array(x_filt), np.array(v_filt), np.array(y_filt)
+
+
+_DIR_MODELOS = Path('modelos_producao')
+_CAMINHO_MODELO = _DIR_MODELOS / 'modelo_fase_mineral.joblib'
+_CAMINHO_METADADOS = _DIR_MODELOS / 'modelo_fase_mineral_metadados.json'
+
+_modelo_fase_mineral = None  # cache em memória -- carrega do disco só 1x
+_faixa_treino_cache = None
+
+
+def _carregar_modelo_fase_mineral():
+    global _modelo_fase_mineral
+    if _modelo_fase_mineral is None:
+        _modelo_fase_mineral = joblib.load(_CAMINHO_MODELO)
+    return _modelo_fase_mineral
+
+
+def _faixa_ctc_treino():
+    """Lê do JSON de metadados a faixa [min, max] de CTC vista no treino."""
+    global _faixa_treino_cache
+    if _faixa_treino_cache is None:
+        with open(_CAMINHO_METADADOS, encoding='utf-8') as f:
+            metadados = json.load(f)
+        valores = metadados['amostras_treino']
+        _faixa_treino_cache = (min(valores), max(valores))
+    return _faixa_treino_cache
+
+
+def classificar_tipo_argila(ctc_meq_100g):
+    if ctc_meq_100g < 15:
+        return "Caulinita (estimado)"
+    elif ctc_meq_100g < 40:
+        return "Ilita (estimado)"
+    else:
+        return "Esmectita/Bentonita (estimado)"
+
+
+def prever_tipo_argila_ml(ctc_meq_100g):
+    """
+    Prevê a fase mineral dominante a partir do CTC usando o modelo treinado
+    (ver treinar_modelo_producao.py). Sempre devolve um texto pronto pra
+    exibir na interface, já com o aviso de confiança.
+
+    Se o modelo não puder ser carregado por qualquer motivo (arquivo
+    ausente, versão incompatível de scikit-learn/joblib etc.), cai de
+    volta pra regra de literatura -- pra NUNCA travar o app por causa do
+    modelo de ML, só perde a previsão mais refinada.
+
+    IMPORTANTE: árvores de decisão dão predict_proba()=100% mesmo fora da
+    faixa de CTC vista no treino (o modelo não tem como saber que está
+    extrapolando -- ele só sabe em qual folha o valor caiu). Por isso,
+    checamos manualmente se o CTC está dentro da faixa treinada antes de
+    confiar na previsão.
+    """
+    try:
+        modelo = _carregar_modelo_fase_mineral()
+    except Exception as erro:
+        tipo_regra = classificar_tipo_argila(ctc_meq_100g)
+        return f"{tipo_regra} [regra de literatura -- modelo ML indisponível: {erro}]"
+
+    ctc_min_treino, ctc_max_treino = _faixa_ctc_treino()
+    fora_da_faixa = not (ctc_min_treino <= ctc_meq_100g <= ctc_max_treino)
+
+    X = [[ctc_meq_100g]]
+    classe_prevista = modelo.predict(X)[0]
+
+    if fora_da_faixa:
+        tipo_regra = classificar_tipo_argila(ctc_meq_100g)
+        return (
+            f"{classe_prevista}? (modelo ML FORA da faixa treinada "
+            f"[{ctc_min_treino:.1f}-{ctc_max_treino:.1f}] -- NÃO CONFIÁVEL. "
+            f"Regra de literatura sugere: {tipo_regra}. Recomenda-se DRX.)"
+        )
+
+    if hasattr(modelo, 'predict_proba'):
+        probabilidades = modelo.predict_proba(X)[0]
+        confianca = max(probabilidades)
+        return f"{classe_prevista} (modelo ML, confiança {confianca:.0%} -- base pequena, verificar por DRX)"
+
+    return f"{classe_prevista} (modelo ML -- base pequena, verificar por DRX)"
+
+
+# ---- teste ----
+for ctc_teste in [40.0, 46.0, 56.0, 85.0, 8.0, 25.0]:
+    print(f"CTC={ctc_teste:>5.1f} -> {prever_tipo_argila_ml(ctc_teste)}")
+
+print()
+print("=== reteste com checagem de faixa ===")
+for ctc in [8.0, 25.0, 40.0, 46.0, 48.0, 56.0, 85.0, 120.0]:
+    print(f"CTC={ctc:>6.1f} -> {prever_tipo_argila_ml(ctc)}")

@@ -2,6 +2,12 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWidget, QPushButton, QLabel, QHBoxLayout, QSizePolicy
 from PySide6.QtGui import QFont
+from typing import Optional, Sequence, Tuple
+
+import numpy as np
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QSizePolicy
 
 HEX_SURFACE      = "#FFFFFF"
 HEX_SURFACE_PRES = "#EBEEF2"
@@ -50,12 +56,7 @@ class StatusPill(QWidget):
         self.label.setStyleSheet(f"color: {HEX_TEXT};")
         self.led.setStyleSheet(f"color: {color_hex};")
 
-from typing import Optional, Sequence, Tuple
 
-import numpy as np
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QSizePolicy
 
 COR_FUNDO = "#EDEDED"
 COR_PAINEL = "#F7F7F7"

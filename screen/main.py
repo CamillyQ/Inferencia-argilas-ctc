@@ -1,9 +1,10 @@
 import sys
 import os
 import csv
+import pandas as pd
 from datetime import datetime
 from time import perf_counter
-
+from analises.modelos_rpi.inferencia_rpi import PredictorRPi5
 from PySide6.QtCore import Qt, QTimer, Slot
 from PySide6.QtWidgets import QApplication, QMainWindow, QStackedWidget, QMessageBox
 
@@ -28,7 +29,7 @@ def configurar_ambiente_rpi():
 class ScadaApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+
         self.setWindowTitle("SCADA - Estação de Medição")
         self.setFixedSize(800, 480)
 
@@ -52,7 +53,7 @@ class ScadaApp(QMainWindow):
         self.screen_manager.addWidget(self.home_screen)
         self.screen_manager.addWidget(self.medicao_screen)
         self.screen_manager.addWidget(self.historico_screen)
-
+        self.predictor = PredictorRPi5(caminho_pasta_modelos="analises/modelos_rpi")
         self.setup_timers()
 
         if not self.arduino.conectado:
@@ -163,7 +164,6 @@ class ScadaApp(QMainWindow):
             f"Condutividade: {condutividade_atual:.2f} µS/cm"
         )
 
-    # ── Processamento (botão "Processar", só habilitado no Estado Finalizado) ──
     @Slot()
     def detectar_cmc(self):
         if self.massa_amostra_g is None:
@@ -179,18 +179,26 @@ class ScadaApp(QMainWindow):
                 normalidade_titulante=0.01,
             )
 
-            tipo_argila = classificar_tipo_argila(ctc_final)
+            df_input = pd.DataFrame([{'ctc_consenso_meq_100g': ctc_final}])
 
+            predicoes = self.predictor.prever(df_input)
+            df_granulo = predicoes["granulometria"]
+            df_fases = predicoes["fases_minerais"]
+
+            # Atualizações da interface gráfica
             self.medicao_screen.plotar_resultado_cmc(resultado)
-            self.medicao_screen.atualizar_resultado(resultado["cmc"], ctc_final, tipo_argila)
+            self.medicao_screen.atualizar_resultado(
+                resultado["cmc"], ctc_final, df_granulo, df_fases
+            )
 
-            self.salvar_dados_csv(resultado, ctc_final, tipo_argila)
+            # Salvamento consolidado no CSV
+            self.salvar_dados_csv(resultado, ctc_final, df_granulo, df_fases)
 
         except Exception as erro:
-            print(f"[PROCESSAMENTO] Erro ao processar CMC/CTC: {erro}")
+            print(f"[PROCESSAMENTO] Erro ao processar CMC/CTC/Inferência: {erro}")
             QMessageBox.critical(
                 self, "Erro ao processar",
-                f"Não foi possível calcular a CMC/CTC desta amostra.\n\nDetalhe: {erro}"
+                f"Não foi possível calcular ou prever os dados desta amostra.\n\nDetalhe: {erro}"
             )
             return
 

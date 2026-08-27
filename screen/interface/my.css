@@ -1,0 +1,16 @@
+QScrollBar:vertical {
+    border: none;
+    background: #1b1b1c;
+    width: 14px; /* Barra mais larga para toque fácil com o dedo */
+    margin: 0px;
+}
+
+QScrollBar::handle:vertical {
+    background: #007acc;
+    min-height: 30px;
+    border-radius: 4px;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px; /* Esconde setas extremas para ganhar área útil */
+}

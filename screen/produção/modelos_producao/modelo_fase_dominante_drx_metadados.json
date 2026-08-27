@@ -1,0 +1,20 @@
+{
+  "tipo_modelo": "DecisionTreeClassifier",
+  "feature": "ctc_consenso_meq_100g",
+  "alvo": "fase_dominante_drx",
+  "eh_classificacao": true,
+  "n_amostras_treino": 6,
+  "amostras_treino": [
+    55.972,
+    57.988,
+    48.0,
+    45.987,
+    85.288,
+    47.981
+  ],
+  "data_treino": "2026-08-25T22:00:14",
+  "classes": [
+    "Caulinita",
+    "Montmorilonita"
+  ]
+}

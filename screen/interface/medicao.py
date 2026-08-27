@@ -1,10 +1,10 @@
-
+import numpy as np
 import os
 from PySide6.QtCore import Qt, Slot, QRectF
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QFrame, QSizePolicy, QStackedWidget, QDoubleSpinBox,
-    QFileDialog, QMessageBox
+    QFileDialog, QMessageBox, QScrollArea
 )
 from PySide6.QtGui import QFont, QPainter, QPen, QColor, QPdfWriter, QPageSize
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis, QScatterSeries
@@ -20,12 +20,13 @@ HEX_ALARM        = "#C62828"
 HEX_OK           = "#2E7D32"
 HEX_SURFACE_PRES = "#2E5284"
 
+
 class MedicaoScreen(QWidget):
     
 
-    ESTADO_INICIAL     = 0
+    ESTADO_INICIAL     = 2
     ESTADO_COLETA      = 1
-    ESTADO_FINALIZADO  = 2
+    ESTADO_FINALIZADO  = 0
 
     def __init__(self, app_instance, parent=None):
         super().__init__(parent)
@@ -33,7 +34,31 @@ class MedicaoScreen(QWidget):
         self.massa_amostra_g = None
         self.init_ui()
         
-        
+
+    def _carregar_dados_mock_para_teste(self):
+        """Popula a tela finalizada com valores simulados para ajustes visuais."""
+        self._ultimo_cmc = 0.001234
+        self._ultimo_ctc = 85.50
+        self._ultimo_tipo = "Bentonita / Esmectita"
+
+        self.lbl_cmc.setText(f"{self._ultimo_cmc:.6f} mol/L")
+        self.lbl_ctc.setText(f"{self._ultimo_ctc:.2f} mEq/100g")
+        self.lbl_tipo_de_argila.setText(self._ultimo_tipo)
+
+        # Gera pontos fictícios para plotar o gráfico de CMC
+        concentracoes = np.linspace(0.0001, 0.005, 10)
+        omegas = concentracoes * 1200 + 15
+        x_trecho = concentracoes[3:8]
+        y_trecho = omegas[3:8]
+
+        resultado_mock = {
+            "concentracoes": concentracoes,
+            "omegas": omegas,
+            "x_trecho": x_trecho,
+            "y_trecho": y_trecho,
+            "reta": (1200, 15)
+        }
+        self.plotar_resultado_cmc(resultado_mock)
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -90,7 +115,8 @@ class MedicaoScreen(QWidget):
         main_layout.addLayout(footer_layout)
         self.setStyleSheet(f"background-color: {HEX_BG};")
 
-        self.mostrar_estado_inicial()
+        self.mostrar_estado_finalizado()
+        self._carregar_dados_mock_para_teste()
 
     def _build_pagina_inicial(self):
         
@@ -208,10 +234,13 @@ class MedicaoScreen(QWidget):
         self.card_cond = self.create_numeric_card("CONDUTIVIDADE", "0.00 µS/cm", "26px")
         self.card_leituras = self.create_numeric_card("LEITURAS RECEBIDAS", "0", "22px")
         self.card_volume = self.create_numeric_card("VOLUME TOTAL ADICIONADO", "0.00 mL", "22px")
+        self.card_diametroMedio = self.create_numeric_card("poxa vida funcionou","----", "16px")
 
         left_panel.addWidget(self.card_cond)
         left_panel.addWidget(self.card_leituras)
         left_panel.addWidget(self.card_volume)
+        left_panel.addWidget(self.card_diametroMedio)
+
 
         titulacao_frame = QFrame()
         titulacao_frame.setStyleSheet(
@@ -310,10 +339,18 @@ class MedicaoScreen(QWidget):
         self.card_cmc = self.create_numeric_card("CMC", "-- (aperte Processar)", "16px")
         self.card_ctc = self.create_numeric_card("CTC", "-- mEq/100g", "24px")
         self.card_tipo = self.create_numeric_card("TIPO DE ARGILA", "--", "18px")
+        self.card_diametroMedio = self.create_numeric_card("poxa vida funcionou","----", "16px")
+        self.card_d10 = self.create_numeric_card("d10","----", "16px")
+        self.card_d50 = self.create_numeric_card("d50","----", "16px")
+        self.card_d90 = self.create_numeric_card("d90","----", "16px")
 
         left_panel.addWidget(self.card_cmc)
         left_panel.addWidget(self.card_ctc)
         left_panel.addWidget(self.card_tipo)
+        left_panel.addWidget(self.card_d10)
+        left_panel.addWidget(self.card_d50)
+        left_panel.addWidget(self.card_d90)
+        left_panel.addWidget(self.card_diametroMedio)
 
         btn_novo_ensaio = QPushButton("Nova Amostra")
         btn_novo_ensaio.setFixedHeight(48)
@@ -323,6 +360,13 @@ class MedicaoScreen(QWidget):
         left_panel.addWidget(btn_novo_ensaio)
         left_panel.addStretch(1)
 
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)  # Ajusta o tamanho do container automaticamente
+        scroll.setWidget(pagina)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff) # Oculta scroll horizontal
+
+        # Otimização para touchscreen do Raspberry Pi (rolagem suave por toque)
+        scroll.setProperty("touchScroll", True)
         chart_frame = QFrame()
         chart_frame.setStyleSheet(
             f"background-color: {HEX_SURFACE}; border: 1px solid {HEX_BORDER}; border-radius: 4px;"
@@ -379,7 +423,7 @@ class MedicaoScreen(QWidget):
 
         body_layout.addLayout(left_panel, stretch=35)
         body_layout.addWidget(chart_frame, stretch=65)
-        return pagina
+        return scroll
 
     def mostrar_estado_inicial(self):
         self.stack_estados.setCurrentIndex(self.ESTADO_INICIAL)
@@ -461,7 +505,8 @@ class MedicaoScreen(QWidget):
         self.lbl_leituras_recebidas.setText("0")
         self.lbl_cmc.setText("-- (aperte Processar)")
         self.lbl_ctc.setText("-- mEq/100g")
-        self.lbl_tipo_de_argila.setText("--")
+        self.lbl_drx.setText("drx estimado")
+        self.lbl_granulometria.setText("granulometria")
 
     def atualizar_volume_total(self, volume_mL):
         self.lbl_volume_total_adicionado.setText(f"{volume_mL:.2f} mL")
@@ -500,7 +545,9 @@ class MedicaoScreen(QWidget):
         self.axis_molar_x.setRange(0, float(concentracoes.max()) * 1.1)
         self.axis_molar_y.setRange(0, float(omegas.max()) * 1.1)
 
-    def atualizar_resultado(self, cmc, ctc, tipo_argila):
+    def atualizar_resultado(self, cmc, ctc, tipo_argila, df_granulo, df_fases):
+        self.lbl_granulometria.setText()
+        self.lbl_drx.setText()
         self.lbl_cmc.setText(f"{cmc:.6f} mol/L")
         self.lbl_ctc.setText(f"{ctc:.2f} mEq/100g")
         self.lbl_tipo_de_argila.setText(tipo_argila)
