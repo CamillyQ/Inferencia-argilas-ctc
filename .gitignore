@@ -1,21 +1,44 @@
-
-.venv/
-venv/
-
+# --- Ambiente Python ---
 __pycache__/
-*.py[cod]
+*.pyc
+*.pyo
+venv/
+env/
+.venv/
 
+# --- Segredos e configuração local ---
+.env
+*.env
+.env.*
 
-.vscode/
-
-
-.idea/
-
-
+# --- Banco de dados local (SQLite) ---
 *.db
 *.sqlite
 *.sqlite3
+dados_ensaios.db
 
-.env
-.DS_Store
+
+
+# --- Relatórios e exportações geradas em runtime ---
+ensaio_*.csv
+ensaio_*.pdf
+*.png
+*.pdf
+
+# --- Imagens ---
+
+figuras/
+images/
+screen/figuras/
+analises/figuras
+interface/assets/
+
+# --- Cloudflare / Wrangler ---
+.wrangler/
+node_modules/
+
+# --- Editor / SO ---
+.vscode/
+.idea/
 Thumbs.db
+.DS_Store

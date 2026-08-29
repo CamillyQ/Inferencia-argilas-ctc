@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import datetime
-
+import duckdb
 
 _CORRECOES = {
     'CLOISISTE': 'CLOSITE',
@@ -304,7 +304,6 @@ def preparar_dataframes(caminho_arquivo):
 
     return df_amostras, df_gran_resumo, df_gran_dist, df_ensaio_drx, df_picos_drx, df_ctc, df_comparacao
 
-import duckdb
 
 _TIPO_DUCKDB = {
     'int64': 'BIGINT',

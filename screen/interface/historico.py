@@ -10,9 +10,8 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QSplitter, QFrame, QMessageBox, QFileDialog,
 )
-
-from database import db
-from components import SCADAButton, GraficoCondutividade
+from services import banco_local as db
+from components import SCADAButton
 
 
 COR_FUNDO = "#EDEDED"
@@ -218,9 +217,12 @@ class TelaHistorico(QWidget):
         linha_pills.addWidget(self.pill_classificacao)
         layout.addLayout(linha_pills)
 
-        self.grafico = GraficoCondutividade()
-        self.grafico.setMinimumHeight(240)
-        layout.addWidget(self.grafico, stretch=1)
+        self.rotulo_resumo = QLabel()
+        self.rotulo_resumo.setWordWrap(True)
+        self.rotulo_resumo.setStyleSheet(f"color: {COR_TEXTO};")
+        self.rotulo_resumo.setTextFormat(Qt.RichText)
+        layout.addWidget(self.rotulo_resumo)
+        layout.addStretch(1)
 
         self.rotulo_sem_selecao = QLabel(
             "Selecione um ensaio na lista à esquerda para ver os detalhes."
@@ -346,7 +348,7 @@ class TelaHistorico(QWidget):
 
         self.botao_exportar_csv.setEnabled(tem_ensaio)
         self.botao_excluir.setEnabled(tem_ensaio)
-        self.grafico.setVisible(tem_ensaio)
+        self.rotulo_resumo.setVisible(tem_ensaio)
         self.rotulo_sem_selecao.setVisible(not tem_ensaio)
 
         if not tem_ensaio:
@@ -359,12 +361,20 @@ class TelaHistorico(QWidget):
         self.pill_cmc.definir_valor(f"{ensaio.get('cmc', 0):.6f} mol/L")
         self.pill_classificacao.definir_valor(str(ensaio.get("classificacao", "—")))
 
-        self.grafico.plotar( 
-            concentracoes=ensaio.get("concentracoes", []),
-            omegas=ensaio.get("omegas", []),
-            reta_pre=ensaio.get("reta_pre"),
-            reta_pos=ensaio.get("reta_pos"),
-            ponto_cmc=(ensaio.get("cmc"), ensaio.get("omega_cmc")),
+        self.rotulo_resumo.setText(
+            f"<b>Amostra:</b> {ensaio.get('amostra', '—')}<br>"
+            f"<b>Massa:</b> {ensaio.get('massa_g', 0):.4f} g<br><br>"
+            f"<b>Granulometria</b><br>"
+            f"d10: {ensaio.get('d10_um', 0):.2f} µm &nbsp; "
+            f"d50: {ensaio.get('d50_um', 0):.2f} µm &nbsp; "
+            f"d90: {ensaio.get('d90_um', 0):.2f} µm &nbsp; "
+            f"médio: {ensaio.get('diametro_medio_um', 0):.2f} µm<br><br>"
+            f"<b>Fases minerais</b><br>"
+            f"Montmorilonita: {ensaio.get('montmorilonita_pct', 0):.2f}% &nbsp; "
+            f"Caulinita: {ensaio.get('caulinita_pct', 0):.2f}%<br>"
+            f"Quartzo: {ensaio.get('quartzo_pct', 0):.2f}% &nbsp; "
+            f"Cristobalita: {ensaio.get('cristobalita_pct', 0):.2f}% &nbsp; "
+            f"Nontronita: {ensaio.get('nontronita_pct', 0):.2f}%"
         )
 
     def _exportar_csv(self) -> None:

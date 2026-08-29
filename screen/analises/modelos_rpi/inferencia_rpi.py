@@ -2,17 +2,37 @@ import joblib
 import pandas as pd
 from pathlib import Path
 
-# Definir nomes das variáveis
+# Definicao dos nomes das variáveis
 ALVOS_GRANULOMETRIA = ['d10_um_com', 'd50_um_com', 'd90_um_com', 'diametro_medio_um_com']
 ALVOS_FASES_MINERAIS = ['Montmorilonita', 'Caulinita', 'Quartzo', 'Cristobalita', 'Nontronita']
 
 class PredictorRPi5:
-    def __init__(self, caminho_pasta_modelos="modelos_rpi"):
-        pasta = Path(caminho_pasta_modelos)
-        
-        # Carregar modelos pre-treinados
-        self.modelos_granulo = joblib.load(pasta / "modelos_granulometria_svr.joblib")
-        self.modelo_fases = joblib.load(pasta / "modelo_fases_arvore.joblib")
+    def __init__(self, caminho_pasta_modelos=None):
+        pasta_atual = Path(__file__).resolve().parent
+
+        if caminho_pasta_modelos is None:
+            pasta = pasta_atual
+        else:
+            pasta = Path(caminho_pasta_modelos)
+
+
+        caminho_granulo = pasta / "modelo_granulometria.joblib"
+        caminho_fases = pasta / "modelo_fases.joblib"
+
+        if not caminho_granulo.exists():
+            raise FileNotFoundError(
+                f"Modelo de granulometria não encontrado:\n"
+                f"{caminho_granulo}"
+            )
+
+        if not caminho_fases.exists():
+            raise FileNotFoundError(
+                f"Modelo de fases minerais não encontrado:\n"
+                f"{caminho_fases}"
+            )
+
+        self.modelos_granulo = joblib.load(caminho_granulo)
+        self.modelo_fases = joblib.load(caminho_fases)
 
     def prever(self, X_atributos):
         """
@@ -34,9 +54,8 @@ class PredictorRPi5:
             "fases_minerais": df_fases
         }
 
-# Exemplo prático de execução no Raspberry Pi 5
 if __name__ == "__main__":
-    predictor = PredictorRPi5(caminho_pasta_modelos="modelos_rpi")
+    predictor = PredictorRPi5(caminho_pasta_modelos=None)
     
     # Substitua 'X_novas_medicoes' pelo DataFrame contendo os atributos medidos da amostra
     # Exemplo sintético com 1 amostra:

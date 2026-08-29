@@ -13,13 +13,12 @@ from services.analises import (
     calcular_concentracao_molar,
     detectar_cmc_joao_original,
     cmc_para_ctc,
-    classificar_tipo_argila,
 )
 from interface.home import HomeScreen
 from interface.medicao import MedicaoScreen
 from interface.historico import TelaHistorico
 from interface.configuracao import CalibracaoDialog
-
+from services.banco_local import inicializar_banco
 
 def configurar_ambiente_rpi():
     os.environ["QT_QPA_EGLFS_HIDECURSOR"] = "1"
@@ -32,7 +31,7 @@ class ScadaApp(QMainWindow):
 
         self.setWindowTitle("SCADA - Estação de Medição")
         self.setFixedSize(800, 480)
-
+        inicializar_banco()
         # Estado do ensaio em andamento
         self.coletando = False
         self.pontos = []                 # (tempo, condutividade) -- gráfico ao vivo
@@ -80,7 +79,7 @@ class ScadaApp(QMainWindow):
         self._tick()
 
         # ── Salvamento de Dados ─────────────────────────────────────────────
-    def salvar_dados_csv(self, resultado, ctc_final, tipo_argila):
+    def salvar_dados_csv(self, resultado, ctc_final):
         """Gera um arquivo CSV com o resumo do ensaio e os pontos de titulação."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         nome_arquivo = f"ensaio_{timestamp}.csv"
@@ -96,7 +95,6 @@ class ScadaApp(QMainWindow):
                 writer.writerow(["CMC (mol/L)", resultado.get("cmc", "")])
                 writer.writerow(["Volume no Corte (mL)", resultado.get("volume_cmc_mL", "")])
                 writer.writerow(["CTC (cmolc/kg)", ctc_final])
-                writer.writerow(["Tipo de Argila", tipo_argila])
                 writer.writerow([])
 
                 # Dados da Titulação
@@ -164,43 +162,6 @@ class ScadaApp(QMainWindow):
             f"Condutividade: {condutividade_atual:.2f} µS/cm"
         )
 
-    @Slot()
-    def detectar_cmc(self):
-        if self.massa_amostra_g is None:
-            print("[PROCESSAMENTO] Massa da amostra não definida.")
-            return
-
-        try:
-            resultado = detectar_cmc_joao_original(self.titulacao)
-
-            ctc_final = cmc_para_ctc(
-                volume_no_corte_mL=resultado["volume_cmc_mL"],
-                massa_amostra_g=self.massa_amostra_g,
-                normalidade_titulante=0.01,
-            )
-
-            df_input = pd.DataFrame([{'ctc_consenso_meq_100g': ctc_final}])
-
-            predicoes = self.predictor.prever(df_input)
-            df_granulo = predicoes["granulometria"]
-            df_fases = predicoes["fases_minerais"]
-
-            # Atualizações da interface gráfica
-            self.medicao_screen.plotar_resultado_cmc(resultado)
-            self.medicao_screen.atualizar_resultado(
-                resultado["cmc"], ctc_final, df_granulo, df_fases
-            )
-
-            # Salvamento consolidado no CSV
-            self.salvar_dados_csv(resultado, ctc_final, df_granulo, df_fases)
-
-        except Exception as erro:
-            print(f"[PROCESSAMENTO] Erro ao processar CMC/CTC/Inferência: {erro}")
-            QMessageBox.critical(
-                self, "Erro ao processar",
-                f"Não foi possível calcular ou prever os dados desta amostra.\n\nDetalhe: {erro}"
-            )
-            return
 
     # ── Transições de estado ────────────────────────────────────────────
     @Slot(float)
@@ -242,6 +203,7 @@ class ScadaApp(QMainWindow):
         self.pontos = []
         self.titulacao = []
         self.volume_acumulado_mL = 0.0
+        self.nome_amostra = None
         self.medicao_screen.mostrar_estado_inicial()
 
     # ── Navegação do Sistema SCADA ───────────────────────────────────────

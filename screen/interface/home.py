@@ -5,7 +5,12 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QPushButton, QLabel, QFrame, QSizePolicy
 )
 from PySide6.QtGui import QFont, QPalette, QColor
+from PySide6.QtGui import QIcon
+from pathlib import Path
+from PySide6.QtCore import Qt, QTime, QTimer, Slot, QSize
 
+BASE_DIR = Path(__file__).resolve().parent.parent
+ICON_DIR = BASE_DIR /"interface"/ "assets"
 
 HEX_BG           = "#F5F5F3" 
 HEX_SURFACE      = "#FFFFFF" 
@@ -32,7 +37,7 @@ class SCADAButton(QPushButton):
         self.is_primary = is_primary
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setMinimumHeight(64)  # Garantindo conformidade ISO 9241-9 para toque
-        self.setFont(QFont("Monospace" if is_primary else "Sans-Serif", 11, QFont.Bold))
+        self.setFont(QFont("Sans-Serif", 11, QFont.Bold))
 
 
 class StatusPill(QWidget):
@@ -72,7 +77,11 @@ class HomeScreen(QWidget):
         main_layout.setContentsMargins(16, 12, 16, 12)
         main_layout.setSpacing(14)
         
+        print("ICON_DIR:", ICON_DIR)
+        print("Existe a pasta?", ICON_DIR.exists())
 
+        for arquivo in ICON_DIR.iterdir():
+            print("Arquivo:", arquivo)
         top_layout = QHBoxLayout()
         self.status_pill = StatusPill()
         
@@ -91,15 +100,33 @@ class HomeScreen(QWidget):
         button_layout = QHBoxLayout()
         button_layout.setSpacing(12)
         
-        self.btn_measure = SCADAButton("⚡ INICIAR MEDIÇÃO", is_primary=True)
-        self.btn_history = SCADAButton("📊 HISTÓRICO", is_primary=False)
-        self.btn_config  = SCADAButton("⚙️ CALIBRAR SENSOR", is_primary=False)
+        self.btn_measure = SCADAButton("    INICIAR MEDIÇÃO", is_primary=True)
+        self.btn_history = SCADAButton("    HISTÓRICO", is_primary=False)
+        self.btn_config  = SCADAButton("    CALIBRAR SENSOR", is_primary=False)
+
+        self.btn_measure.setIcon(
+            QIcon(str(ICON_DIR / "base-de-dados.svg"))
+        )
+
+        self.btn_history.setIcon(
+            QIcon(str(ICON_DIR / "tempo-passado.svg"))
+        )
+
+        self.btn_config.setIcon(
+            QIcon(str(ICON_DIR / "calibracao-de-tela.svg"))
+        )
+
+        icon_size = QSize(25, 25)
+
+        self.btn_measure.setIconSize(icon_size)
+        self.btn_history.setIconSize(icon_size)
+        self.btn_config.setIconSize(icon_size)
         
         self.btn_measure.clicked.connect(self.app_app.acao_iniciar_medicao)
         self.btn_history.clicked.connect(self.app_app.acao_historico)
         self.btn_config.clicked.connect(self.app_app.acao_configuracoes)
         
-        button_layout.addWidget(self.btn_measure, stretch=4)
+        button_layout.addWidget(self.btn_measure, stretch=3)
         button_layout.addWidget(self.btn_history, stretch=3)
         button_layout.addWidget(self.btn_config, stretch=3)
         main_layout.addLayout(button_layout)

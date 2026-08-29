@@ -4,11 +4,16 @@ from PySide6.QtCore import Qt, Slot, QRectF
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QFrame, QSizePolicy, QStackedWidget, QDoubleSpinBox,
-    QFileDialog, QMessageBox, QScrollArea
+    QFileDialog, QMessageBox, QScrollArea, QLineEdit
 )
 from PySide6.QtGui import QFont, QPainter, QPen, QColor, QPdfWriter, QPageSize
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis, QScatterSeries
 from datetime import datetime
+from analises.modelos_rpi.inferencia_rpi import PredictorRPi5
+from services.analises import detectar_cmc_joao_original, cmc_para_ctc
+import pandas as pd
+from PySide6.QtGui import QShortcut, QKeySequence
+from services.banco_local import salvar_ensaio
 
 HEX_BG           = "#F5F5F3"
 HEX_SURFACE      = "#FFFFFF"
@@ -32,6 +37,9 @@ class MedicaoScreen(QWidget):
         super().__init__(parent)
         self.app_app = app_instance
         self.massa_amostra_g = None
+        self.nome_amostra = None
+        self.predictor = PredictorRPi5(caminho_pasta_modelos=None)
+        self._maior_trecho_cmc_visto = 0
         self.init_ui()
         
 
@@ -43,7 +51,6 @@ class MedicaoScreen(QWidget):
 
         self.lbl_cmc.setText(f"{self._ultimo_cmc:.6f} mol/L")
         self.lbl_ctc.setText(f"{self._ultimo_ctc:.2f} mEq/100g")
-        self.lbl_tipo_de_argila.setText(self._ultimo_tipo)
 
         # Gera pontos fictícios para plotar o gráfico de CMC
         concentracoes = np.linspace(0.0001, 0.005, 10)
@@ -61,6 +68,8 @@ class MedicaoScreen(QWidget):
         self.plotar_resultado_cmc(resultado_mock)
 
     def init_ui(self):
+
+        QShortcut(QKeySequence("Ctrl+T"), self).activated.connect(self._teste_inferencia_direta)
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
@@ -107,7 +116,7 @@ class MedicaoScreen(QWidget):
             footer_layout.addWidget(btn)
 
         self.btn_parar.clicked.connect(self.app_app.parar_teste)
-        self.btn_processar.clicked.connect(self.app_app.detectar_cmc)
+        self.btn_processar.clicked.connect(self.processar)
         self.btn_voltar.clicked.connect(self._on_voltar_clicado)
         self.btn_iniciar.clicked.connect(self._on_iniciar_clicado)
         self.btn_salvar.clicked.connect(self.exportar_relatorio)
@@ -125,6 +134,28 @@ class MedicaoScreen(QWidget):
         layout.setAlignment(Qt.AlignCenter)
         layout.setSpacing(16)
 
+        rotulo_nome = QLabel("NOME/IDENTIFICAÇÃO DA AMOSTRA")
+        rotulo_nome.setFont(QFont("Sans-Serif", 9, QFont.Bold))
+        rotulo_nome.setStyleSheet(f"color: {HEX_TEXT_MUTED};")
+        rotulo_nome.setAlignment(Qt.AlignCenter)
+
+        self.campo_nome_amostra = QLineEdit()
+        self.campo_nome_amostra.setPlaceholderText("ex: Verde Lodo, Brasgel...")
+        self.campo_nome_amostra.setFixedSize(300, 48)
+        self.campo_nome_amostra.setAlignment(Qt.AlignCenter)
+        self.campo_nome_amostra.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {HEX_SURFACE};
+                border: 1px solid {HEX_BORDER};
+                border-radius: 6px;
+                padding: 8px;
+                font-size: 16px;
+            }}
+        """)
+
+        layout.addWidget(rotulo_nome, alignment=Qt.AlignCenter)
+        layout.addWidget(self.campo_nome_amostra, alignment=Qt.AlignCenter)
+        layout.addSpacing(12)
         titulo = QLabel("Nova Medição de CTC")
         titulo.setFont(QFont("Sans-Serif", 16, QFont.Bold))
         titulo.setStyleSheet(f"color: {HEX_TEXT};")
@@ -185,6 +216,7 @@ class MedicaoScreen(QWidget):
         quando o botão 'Iniciar' do rodapé for pressionado.
         """
         self.massa_amostra_g = self.spin_massa_amostra.value()
+        self.nome_amostra = self.campo_nome_amostra.text().strip() or None
         self.mostrar_estado_coleta_aguardando()
 
     def _on_iniciar_clicado(self):
@@ -323,9 +355,101 @@ class MedicaoScreen(QWidget):
         body_layout.addWidget(chart_frame, stretch=65)
         return pagina
 
+    def processar(self):
+        if self.massa_amostra_g is None:
+            print("[PROCESSAMENTO] Massa da amostra não definida.")
+            return
+        try:
+            resultado = detectar_cmc_joao_original(self.app_app.titulacao)
+            ctc_final = cmc_para_ctc(
+                volume_no_corte_mL=resultado["volume_cmc_mL"],
+                massa_amostra_g=self.massa_amostra_g,
+                normalidade_titulante=0.01,
+            )
+
+            df_input = pd.DataFrame([{'ctc_consenso_meq_100g': ctc_final}])
+            predicoes = self.app_app.predictor.prever(df_input)
+            df_granulo = predicoes["granulometria"]
+            df_fases = predicoes["fases_minerais"]
+
+
+            self.plotar_resultado_cmc(resultado)
+            self.atualizar_resultado(resultado["cmc"], ctc_final, df_granulo, df_fases)
+
+            self.app_app.salvar_dados_csv(resultado, ctc_final, df_granulo, df_fases)
+            salvar_ensaio(
+                resultado={**resultado, "massa_amostra_g": self.massa_amostra_g},
+                ctc_final=ctc_final,
+                df_granulo=df_granulo,
+                df_fases=df_fases,
+                amostra_nome = self.nome_amostra
+                )
+
+        except Exception as erro:
+            print(f"[PROCESSAMENTO] Erro ao processar CMC/CTC/Inferência: {erro}")
+            QMessageBox.critical(
+                self, "Erro ao processar",
+                f"Não foi possível calcular ou prever os dados desta amostra.\n\nDetalhe: {erro}"
+            )
+            
     def _on_registrar_adicao(self):
         volume_mL = self.spin_volume_adicao.value()
         self.app_app.registrar_adicao(volume_mL)
+        self._verificar_cmc_tempo_real()
+        
+    def _verificar_cmc_tempo_real(self):
+        """
+        Roda a mesma detecção usada no botão 'Processar', mas a cada nova
+        adição registrada durante a coleta. Só interrompe o usuário quando
+        o trecho linear encontrado for MAIOR do que o último trecho já
+        avisado -- ou seja, quando a curva "cresceu" na região achatada
+        pós-CMC, sugerindo um ponto de corte mais robusto/confiável.
+
+        Se o usuário responder "Não", o tamanho do trecho atual fica
+        registrado como piso: só voltamos a perguntar se um trecho ainda
+        maior aparecer depois. Isso evita repetir o popup a cada ponto novo
+        que só confirma o mesmo platô.
+
+        ValueError aqui é esperado e silencioso: no início da coleta ainda
+        não há pontos suficientes pra formar nenhum trecho linear dentro
+        do limiar -- não é erro, é a curva ainda "descendo".
+
+        No 'Sim', só paramos a coleta (parar_teste) -- de propósito NÃO
+        chamamos processar() aqui: processar() grava CSV e no banco
+        (efeito colateral permanente) e roda inferência de ML, então deve
+        continuar sendo uma ação explícita do usuário, no botão dedicado.
+        """
+        if self.massa_amostra_g is None:
+            return
+        try:
+            resultado = detectar_cmc_joao_original(self.app_app.titulacao)
+        except ValueError:
+            return
+        except Exception as erro:
+            print(f"[CMC tempo real] erro inesperado na detecção: {erro}")
+            return
+
+        tamanho_trecho = len(resultado["x_trecho"])
+        if tamanho_trecho <= self._maior_trecho_cmc_visto:
+            return
+
+        self._maior_trecho_cmc_visto = tamanho_trecho
+
+        cmc = resultado["cmc"]
+        volume_cmc = resultado["volume_cmc_mL"]
+        resposta = QMessageBox.question(
+            self,
+            "Ponto de CMC encontrado",
+            f"Um trecho linear maior foi identificado na curva.\n\n"
+            f"Concentração no ponto de corte: {cmc:.6f} mol/L\n"
+            f"Volume acumulado no ponto de corte: {volume_cmc:.2f} mL\n"
+            f"Pontos no trecho linear: {tamanho_trecho}\n\n"
+            "Deseja parar a coleta agora?",
+            QMessageBox.Sim | QMessageBox.Não,
+            QMessageBox.Não,  # padrão seguro -- nunca para sozinho
+        )
+        if resposta == QMessageBox.Yes:
+            self.app_app.parar_teste()
 
     def _build_pagina_finalizado(self):
         pagina = QWidget()
@@ -333,40 +457,57 @@ class MedicaoScreen(QWidget):
         body_layout.setContentsMargins(12, 12, 12, 12)
         body_layout.setSpacing(12)
 
-        left_panel = QVBoxLayout()
+        #painel esquerdo (conteúdo que vai rolar)
+        left_content = QWidget()
+        left_panel = QVBoxLayout(left_content)
+        left_panel.setContentsMargins(0, 0, 0, 0)
         left_panel.setSpacing(10)
 
         self.card_cmc = self.create_numeric_card("CMC", "-- (aperte Processar)", "16px")
-        self.card_ctc = self.create_numeric_card("CTC", "-- mEq/100g", "24px")
-        self.card_tipo = self.create_numeric_card("TIPO DE ARGILA", "--", "18px")
-        self.card_diametroMedio = self.create_numeric_card("poxa vida funcionou","----", "16px")
-        self.card_d10 = self.create_numeric_card("d10","----", "16px")
-        self.card_d50 = self.create_numeric_card("d50","----", "16px")
-        self.card_d90 = self.create_numeric_card("d90","----", "16px")
+        self.card_ctc = self.create_numeric_card("CTC", "-- mEq/100g", "16px")
+        self.card_d10 = self.create_numeric_card("d10 (μm)", "----", "16px", attr_name="d10")
+        self.card_d50 = self.create_numeric_card("d50 (μm)", "----", "16px", attr_name="d50")
+        self.card_d90 = self.create_numeric_card("d90 (μm)", "----", "16px", attr_name="d90")
+        self.card_diametroMedio = self.create_numeric_card("diametro médio (μm)", "----", "16px", attr_name="diametro_medio")
+        self.card_mont = self.create_numeric_card("Montmorilonita (%)", "----", "16px", attr_name="montmorilonita")
+        self.card_cau  = self.create_numeric_card("Caulinita (%)", "----", "16px", attr_name="caulinita")
+        self.card_qua  = self.create_numeric_card("Quartzo (%)", "----", "16px", attr_name="quartzo")
+        self.card_non  = self.create_numeric_card("Nontronita (%)", "----", "16px", attr_name="nontronita")
+        self.card_cris = self.create_numeric_card("Cristobalita (%)", "----", "16px", attr_name="cristobalita")
+
+
+        layout_d10_d50 = QHBoxLayout()
+        layout_d10_d50.setContentsMargins(0, 0, 0, 0)
+        layout_d10_d50.setSpacing(10)
+        layout_d10_d50.addWidget(self.card_d10)
+        layout_d10_d50.addWidget(self.card_d50)
+
+        layout_d90_dm = QHBoxLayout()
+        layout_d90_dm.setContentsMargins(0, 0, 0, 0)
+        layout_d90_dm.setSpacing(10)
+        layout_d90_dm.addWidget(self.card_d90)
+        layout_d90_dm.addWidget(self.card_diametroMedio)
+
 
         left_panel.addWidget(self.card_cmc)
         left_panel.addWidget(self.card_ctc)
-        left_panel.addWidget(self.card_tipo)
-        left_panel.addWidget(self.card_d10)
-        left_panel.addWidget(self.card_d50)
-        left_panel.addWidget(self.card_d90)
-        left_panel.addWidget(self.card_diametroMedio)
-
-        btn_novo_ensaio = QPushButton("Nova Amostra")
-        btn_novo_ensaio.setFixedHeight(48)
-        btn_novo_ensaio.setFont(QFont("Sans-Serif", 9, QFont.Bold))
-        btn_novo_ensaio.setStyleSheet(self.get_button_style())
-        btn_novo_ensaio.clicked.connect(self.app_app.novo_ensaio)
-        left_panel.addWidget(btn_novo_ensaio)
+        left_panel.addLayout(layout_d10_d50)
+        left_panel.addLayout(layout_d90_dm)
+        left_panel.addWidget(self.card_mont)
+        left_panel.addWidget(self.card_cau)
+        left_panel.addWidget(self.card_qua)
+        left_panel.addWidget(self.card_non)
+        left_panel.addWidget(self.card_cris)
         left_panel.addStretch(1)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)  # Ajusta o tamanho do container automaticamente
-        scroll.setWidget(pagina)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff) # Oculta scroll horizontal
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setWidget(left_content)
+        left_scroll.setFrameShape(QFrame.NoFrame)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        left_scroll.setProperty("touchScroll", True)
 
-        # Otimização para touchscreen do Raspberry Pi (rolagem suave por toque)
-        scroll.setProperty("touchScroll", True)
+        # ---------- gráfico (fixo, fora do scroll) ----------
         chart_frame = QFrame()
         chart_frame.setStyleSheet(
             f"background-color: {HEX_SURFACE}; border: 1px solid {HEX_BORDER}; border-radius: 4px;"
@@ -421,9 +562,9 @@ class MedicaoScreen(QWidget):
         self.chart_view_molar = chart_view_molar
         chart_layout.addWidget(chart_view_molar)
 
-        body_layout.addLayout(left_panel, stretch=35)
+        body_layout.addWidget(left_scroll, stretch=35)
         body_layout.addWidget(chart_frame, stretch=65)
-        return scroll
+        return pagina
 
     def mostrar_estado_inicial(self):
         self.stack_estados.setCurrentIndex(self.ESTADO_INICIAL)
@@ -454,7 +595,20 @@ class MedicaoScreen(QWidget):
         self.btn_processar.setEnabled(True)
         self.btn_salvar.setEnabled(True)
 
-    def create_numeric_card(self, title, initial_value, font_size):
+    def _teste_inferencia_direta(self):
+        """MÉTODO DE DEBUG -- remover antes de ir pra produção."""
+        ctc_fake = 48
+        df_input = pd.DataFrame([{'ctc_consenso_meq_100g': ctc_fake}])
+        predicoes = self.predictor.prever(df_input)
+        df_granulo = predicoes["granulometria"]
+        df_fases = predicoes["fases_minerais"]
+        
+
+        self.atualizar_resultado(cmc=0.001234, ctc=ctc_fake, df_granulo=df_granulo, df_fases=df_fases)
+        print(df_granulo)
+        print(df_fases)
+
+    def create_numeric_card(self, title, initial_value, font_size, attr_name=None):
         frame = QFrame()
         frame.setStyleSheet(
             f"background-color: {HEX_SURFACE}; border: 1px solid {HEX_BORDER}; border-radius: 4px;"
@@ -476,7 +630,9 @@ class MedicaoScreen(QWidget):
         layout.addWidget(title_lbl)
         layout.addWidget(val_lbl)
 
-        setattr(self, f"lbl_{title.lower().replace(' ', '_').replace('çã', 'ca')}", val_lbl)
+
+        nome_attr = attr_name or title.lower().replace(' ', '_')
+        setattr(self, f"lbl_{nome_attr}", val_lbl)
         return frame
 
     @Slot(float, float)
@@ -499,6 +655,7 @@ class MedicaoScreen(QWidget):
         self.series_titulacao_todos.clear()
         self.series_titulacao_linear.clear()
         self.series_ajuste_rls.clear()
+        self._maior_trecho_cmc_visto = 0
         if hasattr(self, "_ultimo_cmc"):
             del self._ultimo_cmc
         self.lbl_volume_total_adicionado.setText("0.00 mL")
@@ -536,7 +693,6 @@ class MedicaoScreen(QWidget):
         for c, o in zip(x_trecho, y_trecho):
             self.series_titulacao_linear.append(float(c), float(o))
 
-        # Desenha a reta ao longo de todo o trecho linear identificado
         c_ini = float(x_trecho[0])
         c_fim = float(x_trecho[-1])
         self.series_ajuste_rls.append(c_ini, a * c_ini + b)
@@ -545,18 +701,32 @@ class MedicaoScreen(QWidget):
         self.axis_molar_x.setRange(0, float(concentracoes.max()) * 1.1)
         self.axis_molar_y.setRange(0, float(omegas.max()) * 1.1)
 
-    def atualizar_resultado(self, cmc, ctc, tipo_argila, df_granulo, df_fases):
-        self.lbl_granulometria.setText()
-        self.lbl_drx.setText()
+
+    def atualizar_resultado(self, cmc, ctc, df_granulo, df_fases):
         self.lbl_cmc.setText(f"{cmc:.6f} mol/L")
         self.lbl_ctc.setText(f"{ctc:.2f} mEq/100g")
-        self.lbl_tipo_de_argila.setText(tipo_argila)
 
-        # Guarda pra usar no cabeçalho do relatório exportado (exportar_relatorio)
+        g = df_granulo.iloc[0]
+        self.lbl_d10.setText(f"{g['d10_um_com']:.2f}")
+        self.lbl_d50.setText(f"{g['d50_um_com']:.2f}")
+        self.lbl_d90.setText(f"{g['d90_um_com']:.2f}")
+        self.lbl_diametro_medio.setText(f"{g['diametro_medio_um_com']:.2f}")
+    
+        f = df_fases.iloc[0]
+        
+        def fase_pct(val):
+            v = float(val)
+            if 0 < v <= 1.0:
+                v *= 100.0
+            return f"{v:.2f}%"
+        self.lbl_montmorilonita.setText(fase_pct(f['Montmorilonita']))
+        self.lbl_caulinita.setText(fase_pct(f['Caulinita']))
+        self.lbl_quartzo.setText(fase_pct(f['Quartzo']))
+        self.lbl_nontronita.setText(fase_pct(f['Nontronita']))
+        self.lbl_cristobalita.setText(fase_pct(f['Cristobalita']))
+
         self._ultimo_cmc = cmc
         self._ultimo_ctc = ctc
-        self._ultimo_tipo = tipo_argila
-
     def get_button_style(self, is_action=False):
         if is_action:
             return f"""
