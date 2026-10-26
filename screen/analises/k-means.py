@@ -1,119 +1,141 @@
-
 import duckdb
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from pathlib import Path
+import seaborn as sns
 from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score
+from pathlib import Path
 
-CAMINHO_DB = 'pibic_dados.duckdb'
-DIR_FIGURAS = Path('figuras')
-DIR_FIGURAS.mkdir(exist_ok=True)
+CAMINHO_DB = (
+    Path(__file__).resolve().parent.parent
+    / "database"
+    / "duckdb"
+    / "pibic_dados.duckdb"
+)
 
-# Mesmas features de CTC usadas nos modelos supervisionados -- quando você
-# adicionar amostras de outros domínios, granulometria e DRX também
-# poderão entrar aqui como features de agrupamento (hoje ficam de fora
-# porque nos modelos supervisionados são ALVO, não features -- mas nada
-# impede usá-las aqui, já que K-means não distingue feature de alvo).
-FEATURES_CLUSTERING = ['ctc_consenso_meq_100g', 'ctc_razao_metodos']
+con = duckdb.connect(CAMINHO_DB)
 
+# Ajuste 'nome_amostra' para o nome real da coluna identificadora da amostra
+query = """
+SELECT 
+    amostra,
+    pct_drx_Montmorilonita,
+    pct_drx_Caulinita,
+    pct_drx_Quartzo,
+    pct_drx_Cristobalita,
+    pct_drx_Nontronita,
+    d10_um_com,
+    d50_um_com,
+    d90_um_com,
+    ctc_consenso_meq_100g
+FROM atributos_ctc
+"""
+df = con.execute(query).df()
+con.close()
 
-def carregar_atributos(caminho_db=CAMINHO_DB):
-    con = duckdb.connect(caminho_db, read_only=True)
-    df = con.sql("SELECT * FROM atributos_ctc").df()
-    con.close()
-    return df
+df["span_granulometrico"] = df["d90_um_com"] - df["d10_um_com"]
 
+features = [
+    "pct_drx_Montmorilonita",
+    "pct_drx_Caulinita",
+    "pct_drx_Quartzo",
+    "pct_drx_Cristobalita",
+    "pct_drx_Nontronita",
+    "d50_um_com",
+    "span_granulometrico",
+    "ctc_consenso_meq_100g",  # EDA apenas — NÃO reusar cluster_id como feature preditiva de CTC
+]
 
-def escolher_k_pelo_cotovelo_e_silhueta(X, k_min=2, k_max=None):
-    """
-    Roda K-means pra vários valores de k e retorna inércia (método do
-    cotovelo) e coeficiente de silhueta pra cada um. Com poucas amostras,
-    k_max é limitado a n_amostras - 1 (silhueta não é definida pra k=n).
-    """
-    n = len(X)
-    if k_max is None:
-        k_max = max(k_min, n - 1)
-    k_max = min(k_max, n - 1)
+X = df[features].dropna().copy()
+nomes = df.loc[X.index, "amostra"].values
+n_amostras = X.shape[0]
 
-    resultados = []
-    for k in range(k_min, k_max + 1):
-        km = KMeans(n_clusters=k, n_init=10, random_state=42)
-        rotulos = km.fit_predict(X)
-        inercia = km.inertia_
-        silhueta = silhouette_score(X, rotulos) if k < n else np.nan
-        resultados.append({'k': k, 'inercia': inercia, 'silhueta': silhueta})
-    return pd.DataFrame(resultados)
+print(f"n_amostras = {n_amostras}, n_features = {len(features)}")
+if n_amostras < 3 * len(features):
+    print("Aviso: n_amostras pequeno relativo ao nº de features — PCA/KMeans exploratórios, não robustos.")
 
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
 
-def plot_cotovelo_silhueta(df_k, caminho_saida):
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
-    ax1.plot(df_k['k'], df_k['inercia'], 'o-')
-    ax1.set_xlabel('k (nº de clusters)')
-    ax1.set_ylabel('Inércia (soma dos quadrados intra-cluster)')
-    ax1.set_title('Método do cotovelo')
+# Teto explícito de componentes: no máx. n_amostras-1, e nunca mais que o necessário para 85%
+max_componentes_possiveis = n_amostras - 1
+pca_full = PCA(n_components=max_componentes_possiveis, random_state=42)
+pca_full.fit(X_scaled)
+cum_var_full = np.cumsum(pca_full.explained_variance_ratio_)
+n_comp_85 = int(np.argmax(cum_var_full >= 0.85) + 1)
 
-    ax2.plot(df_k['k'], df_k['silhueta'], 'o-', color='darkorange')
-    ax2.set_xlabel('k (nº de clusters)')
-    ax2.set_ylabel('Coeficiente de silhueta')
-    ax2.set_title('Silhueta (mais próximo de 1 = clusters mais separados)')
+if n_comp_85 >= max_componentes_possiveis:
+    print(f"Aviso: precisou de {n_comp_85}/{max_componentes_possiveis} componentes possíveis para 85% — "
+          f"redução de dimensionalidade pouco efetiva com n={n_amostras}.")
 
-    fig.tight_layout()
-    fig.savefig(caminho_saida, dpi=200)
-    plt.close(fig)
+pca = PCA(n_components=n_comp_85, random_state=42)
+X_pca = pca.fit_transform(X_scaled)
+print(f"Componentes retidas: {pca.n_components_} | Variância acumulada: {sum(pca.explained_variance_ratio_)*100:.2f}%")
 
+# Escolha de k via silhouette (só k=2 e k=3 fazem sentido com n=6)
+print("\nSilhouette score por k:")
+melhores_k = {}
+for k in range(2, min(4, n_amostras - 1) + 1):
+    km = KMeans(n_clusters=k, random_state=42, n_init=10)
+    labels_k = km.fit_predict(X_pca)
+    score = silhouette_score(X_pca, labels_k)
+    melhores_k[k] = score
+    print(f"  k={k}: silhouette={score:.3f}")
 
-def plot_clusters(df, rotulos, features, caminho_saida):
-    fig, ax = plt.subplots(figsize=(7, 5))
-    cores_cluster = plt.cm.tab10(np.linspace(0, 1, len(set(rotulos))))
-    for cluster_id in sorted(set(rotulos)):
-        mascara = rotulos == cluster_id
-        ax.scatter(df.loc[mascara, features[0]], df.loc[mascara, features[1]],
-                   color=cores_cluster[cluster_id], label=f'Cluster {cluster_id}', s=100)
-    for _, linha in df.iterrows():
-        ax.annotate(linha['amostra'], (linha[features[0]], linha[features[1]]),
-                    fontsize=8, xytext=(5, 5), textcoords='offset points')
-    ax.set_xlabel(features[0])
-    ax.set_ylabel(features[1])
-    ax.set_title('K-means sobre features de CTC')
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(caminho_saida, dpi=200)
-    plt.close(fig)
+n_clusters = max(melhores_k, key=melhores_k.get)
+print(f"\nk escolhido por silhouette: {n_clusters}")
 
+kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+X["cluster"] = kmeans.fit_predict(X_pca)
 
-def main():
-    df = carregar_atributos()
-    dados = df.dropna(subset=FEATURES_CLUSTERING).reset_index(drop=True)
+tamanhos = X["cluster"].value_counts().sort_index()
+print("\nTamanho de cada cluster:")
+print(tamanhos)
+if (tamanhos == 1).any():
+    print("Aviso: há cluster com 1 única amostra — provável outlier isolado, não um agrupamento genuíno.")
 
-    print(f"Amostras disponíveis pra clustering: {len(dados)} ({list(dados['amostra'])})")
-    print("\nAVISO: todas as amostras atuais são bentonitas do mesmo estudo.")
-    print("Os clusters abaixo são um teste de pipeline, não uma descoberta física.\n")
+# Visualizações
+sns.set_theme(style="whitegrid")
+fig, axes = plt.subplots(1, 3, figsize=(19, 5))
 
-    X = StandardScaler().fit_transform(dados[FEATURES_CLUSTERING])
+cum_var = np.cumsum(pca.explained_variance_ratio_) * 100
+axes[0].plot(range(1, len(cum_var) + 1), cum_var, marker="o", color="b", linestyle="--")
+axes[0].axhline(y=85, color="r", linestyle=":", label="Corte 85%")
+axes[0].set_title("Variância Explicada Acumulada (PCA)")
+axes[0].set_xlabel("Número de Componentes")
+axes[0].set_ylabel("Variância Explicada (%)")
+axes[0].set_ylim(0, 105)
+axes[0].legend()
 
-    df_k = escolher_k_pelo_cotovelo_e_silhueta(X)
-    print(df_k.to_string(index=False))
-    plot_cotovelo_silhueta(df_k, DIR_FIGURAS / 'kmeans_cotovelo_silhueta.png')
+sns.scatterplot(
+    x=X_pca[:, 0], y=X_pca[:, 1], hue=X["cluster"], palette="Set2",
+    style=X["cluster"], s=100, ax=axes[1],
+)
+for i, nome in enumerate(nomes):
+    axes[1].annotate(nome, (X_pca[i, 0], X_pca[i, 1]), fontsize=8, xytext=(5, 5), textcoords="offset points")
+axes[1].set_title(f"Clusters no Espaço $PC_1$ vs $PC_2$ (n={n_amostras})")
+axes[1].set_xlabel(f"$PC_1$ ({pca.explained_variance_ratio_[0]*100:.1f}% var)")
+axes[1].set_ylabel(f"$PC_2$ ({pca.explained_variance_ratio_[1]*100:.1f}% var)")
 
-    # k melhor pela silhueta (ignorando NaN)
-    k_escolhido = int(df_k.loc[df_k['silhueta'].idxmax(), 'k']) if df_k['silhueta'].notna().any() else 2
-    print(f"\nk escolhido pela silhueta: {k_escolhido}")
+X_scaled_df = pd.DataFrame(X_scaled, columns=features)
+X_scaled_df["cluster"] = X["cluster"].values
+cluster_means = X_scaled_df.groupby("cluster").mean()
 
-    km = KMeans(n_clusters=k_escolhido, n_init=10, random_state=42)
-    rotulos = km.fit_predict(X)
-    dados['cluster'] = rotulos
-    print(dados[['amostra', 'ctc_consenso_meq_100g', 'ctc_razao_metodos', 'fase_dominante_drx', 'cluster']])
+sns.heatmap(cluster_means, annot=True, cmap="coolwarm", fmt=".2f", ax=axes[2], cbar=True)
+axes[2].set_title("Perfil Médio dos Clusters (Escala Z-score)")
+axes[2].set_ylabel("Cluster")
 
-    plot_clusters(dados, rotulos, FEATURES_CLUSTERING, DIR_FIGURAS / 'kmeans_clusters.png')
+plt.tight_layout()
+plt.savefig("clusters_argilas.png", dpi=150)
+plt.show()
 
-    con = duckdb.connect(CAMINHO_DB)
-    con.execute("CREATE OR REPLACE TABLE clusters_kmeans AS SELECT * FROM dados")
-    con.close()
-    print(f"\ntabela 'clusters_kmeans' salva no banco. Figuras em: {DIR_FIGURAS.resolve()}")
-
-
-if __name__ == '__main__':
-    main()
+loadings = pd.DataFrame(
+    pca.components_.T,
+    columns=[f"PC{i+1}" for i in range(pca.n_components_)],
+    index=features,
+)
+print("\nCargas (loadings) por componente:")
+print(loadings.sort_values(by="PC1", ascending=False))

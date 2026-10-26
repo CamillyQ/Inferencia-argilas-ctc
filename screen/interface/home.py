@@ -36,7 +36,7 @@ class SCADAButton(QPushButton):
         super().__init__(text, parent)
         self.is_primary = is_primary
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.setMinimumHeight(64)  # Garantindo conformidade ISO 9241-9 para toque
+        self.setMinimumHeight(64)
         self.setFont(QFont("Sans-Serif", 11, QFont.Bold))
 
 

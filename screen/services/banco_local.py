@@ -4,7 +4,7 @@ from pathlib import Path
 from datetime import datetime, date
 import uuid
 
-CAMINHO_BANCO_LOCAL = Path("dados_ensaios.db")
+CAMINHO_BANCO_LOCAL = Path(__file__).resolve().parent.parent / "dados_ensaios.db"
 
 
 def obter_conexao():

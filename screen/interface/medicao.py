@@ -1,18 +1,17 @@
 import numpy as np
 import os
+import pandas as pd
+from datetime import datetime
 from PySide6.QtCore import Qt, Slot, QRectF
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QFrame, QSizePolicy, QStackedWidget, QDoubleSpinBox,
+    QPushButton, QFrame, QStackedWidget, QDoubleSpinBox,
     QFileDialog, QMessageBox, QScrollArea, QLineEdit
 )
 from PySide6.QtGui import QFont, QPainter, QPen, QColor, QPdfWriter, QPageSize
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis, QScatterSeries
-from datetime import datetime
-from analises.modelos_rpi.inferencia_rpi import PredictorRPi5
+
 from services.analises import detectar_cmc_joao_original, cmc_para_ctc
-import pandas as pd
-from PySide6.QtGui import QShortcut, QKeySequence
 from services.banco_local import salvar_ensaio
 
 HEX_BG           = "#F5F5F3"
@@ -27,49 +26,24 @@ HEX_SURFACE_PRES = "#2E5284"
 
 
 class MedicaoScreen(QWidget):
-    
 
-    ESTADO_INICIAL     = 2
+    # Mesma ordem em que as páginas são adicionadas ao stack em init_ui()
+    ESTADO_INICIAL     = 0
     ESTADO_COLETA      = 1
-    ESTADO_FINALIZADO  = 0
+    ESTADO_FINALIZADO  = 2
 
     def __init__(self, app_instance, parent=None):
         super().__init__(parent)
         self.app_app = app_instance
         self.massa_amostra_g = None
         self.nome_amostra = None
-        self.predictor = PredictorRPi5(caminho_pasta_modelos=None)
         self._maior_trecho_cmc_visto = 0
+        self._ultimo_cmc = None
+        self._ultimo_ctc = None
+        self._ensaio_salvo = False
         self.init_ui()
-        
-
-    def _carregar_dados_mock_para_teste(self):
-        """Popula a tela finalizada com valores simulados para ajustes visuais."""
-        self._ultimo_cmc = 0.001234
-        self._ultimo_ctc = 85.50
-        self._ultimo_tipo = "Bentonita / Esmectita"
-
-        self.lbl_cmc.setText(f"{self._ultimo_cmc:.6f} mol/L")
-        self.lbl_ctc.setText(f"{self._ultimo_ctc:.2f} mEq/100g")
-
-        # Gera pontos fictícios para plotar o gráfico de CMC
-        concentracoes = np.linspace(0.0001, 0.005, 10)
-        omegas = concentracoes * 1200 + 15
-        x_trecho = concentracoes[3:8]
-        y_trecho = omegas[3:8]
-
-        resultado_mock = {
-            "concentracoes": concentracoes,
-            "omegas": omegas,
-            "x_trecho": x_trecho,
-            "y_trecho": y_trecho,
-            "reta": (1200, 15)
-        }
-        self.plotar_resultado_cmc(resultado_mock)
 
     def init_ui(self):
-
-        QShortcut(QKeySequence("Ctrl+T"), self).activated.connect(self._teste_inferencia_direta)
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
@@ -94,9 +68,9 @@ class MedicaoScreen(QWidget):
         main_layout.addWidget(header_frame)
 
         self.stack_estados = QStackedWidget()
-        self.stack_estados.addWidget(self._build_pagina_inicial())
-        self.stack_estados.addWidget(self._build_pagina_coleta())
-        self.stack_estados.addWidget(self._build_pagina_finalizado())
+        self.stack_estados.addWidget(self._build_pagina_inicial())     # 0
+        self.stack_estados.addWidget(self._build_pagina_coleta())      # 1
+        self.stack_estados.addWidget(self._build_pagina_finalizado())  # 2
         main_layout.addWidget(self.stack_estados, stretch=1)
 
         footer_layout = QHBoxLayout()
@@ -115,7 +89,8 @@ class MedicaoScreen(QWidget):
             btn.setStyleSheet(self.get_button_style())
             footer_layout.addWidget(btn)
 
-        self.btn_parar.clicked.connect(self.app_app.parar_teste)
+        # "Parar" agora também dispara o processamento (CMC -> CTC -> modelo)
+        self.btn_parar.clicked.connect(self._parar_e_processar)
         self.btn_processar.clicked.connect(self.processar)
         self.btn_voltar.clicked.connect(self._on_voltar_clicado)
         self.btn_iniciar.clicked.connect(self._on_iniciar_clicado)
@@ -124,11 +99,12 @@ class MedicaoScreen(QWidget):
         main_layout.addLayout(footer_layout)
         self.setStyleSheet(f"background-color: {HEX_BG};")
 
-        self.mostrar_estado_finalizado()
-        self._carregar_dados_mock_para_teste()
+        self.mostrar_estado_inicial()
 
+    # ────────────────────────────────────────────────────────────────
+    # Páginas
+    # ────────────────────────────────────────────────────────────────
     def _build_pagina_inicial(self):
-        
         pagina = QWidget()
         layout = QVBoxLayout(pagina)
         layout.setAlignment(Qt.AlignCenter)
@@ -156,6 +132,7 @@ class MedicaoScreen(QWidget):
         layout.addWidget(rotulo_nome, alignment=Qt.AlignCenter)
         layout.addWidget(self.campo_nome_amostra, alignment=Qt.AlignCenter)
         layout.addSpacing(12)
+
         titulo = QLabel("Nova Medição de CTC")
         titulo.setFont(QFont("Sans-Serif", 16, QFont.Bold))
         titulo.setStyleSheet(f"color: {HEX_TEXT};")
@@ -173,10 +150,10 @@ class MedicaoScreen(QWidget):
 
         self.spin_massa_amostra = QDoubleSpinBox()
         self.spin_massa_amostra.setDecimals(1)
-        self.spin_massa_amostra.setRange(0, 1.0)
+        self.spin_massa_amostra.setRange(0.1, 10)
         self.spin_massa_amostra.setSingleStep(0.1)
         self.spin_massa_amostra.setSuffix(" g")
-        self.spin_massa_amostra.setFixedSize(300,60)
+        self.spin_massa_amostra.setFixedSize(300, 60)
         self.spin_massa_amostra.setStyleSheet(f"""
             QDoubleSpinBox {{
                 background-color: {HEX_SURFACE};
@@ -185,12 +162,11 @@ class MedicaoScreen(QWidget):
                 padding: 8px;
                 font-size: 20px;
             }}
-
             QDoubleSpinBox::up-button,
             QDoubleSpinBox::down-button {{
                 width: 40px;
             }}
-            """)
+        """)
         self.spin_massa_amostra.setAlignment(Qt.AlignCenter)
 
         btn_iniciar_coleta = QPushButton("Iniciar Coleta")
@@ -208,52 +184,6 @@ class MedicaoScreen(QWidget):
         layout.addWidget(btn_iniciar_coleta, alignment=Qt.AlignCenter)
         return pagina
 
-    def _on_iniciar_coleta_clicado(self):
-        """
-        Clique em 'Iniciar Coleta' (página inicial): só salva a massa
-        informada e leva o usuário para a tela de coleta, em modo
-        'aguardando'. A aquisição real (Arduino, timers) só começa
-        quando o botão 'Iniciar' do rodapé for pressionado.
-        """
-        self.massa_amostra_g = self.spin_massa_amostra.value()
-        self.nome_amostra = self.campo_nome_amostra.text().strip() or None
-        self.mostrar_estado_coleta_aguardando()
-
-    def _on_iniciar_clicado(self):
-        """
-        Clique em 'Iniciar' (rodapé): aqui sim dispara o início real
-        da aquisição, usando a massa salva no passo anterior.
-        """
-        self.app_app.iniciar_teste(self.massa_amostra_g)
-
-    def _on_voltar_clicado(self):
-        # Na tela inicial não tem nada em andamento -- sai direto, sem perguntar
-        if self.stack_estados.currentIndex() == self.ESTADO_INICIAL:
-            self.app_app.voltar_home()
-            return
-
-        resposta = QMessageBox.question(
-            self,
-            "Descartar medição?",
-            "Você tem uma medição em andamento (ou recém-concluída) que ainda "
-            "não foi salva/exportada.\n\n"
-            "Se voltar agora, todos os dados desta medição serão perdidos.\n\n"
-            "Deseja realmente descartar e voltar?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,  # padrão seguro -- nunca descarta sem confirmação explícita
-        )
-        if resposta != QMessageBox.Yes:
-            return
-
-        # Se ainda estava coletando de verdade (não só na tela de espera),
-        # para o Arduino com segurança antes de sair -- não deixa o
-        # equipamento "titulando sozinho" sem ninguém olhando.
-        if self.app_app.coletando:
-            self.app_app.parar_teste()
-
-        self.app_app.novo_ensaio()  # reseta massa/pontos/titulação
-        self.app_app.voltar_home()
-
     def _build_pagina_coleta(self):
         pagina = QWidget()
         body_layout = QHBoxLayout(pagina)
@@ -266,13 +196,10 @@ class MedicaoScreen(QWidget):
         self.card_cond = self.create_numeric_card("CONDUTIVIDADE", "0.00 µS/cm", "26px")
         self.card_leituras = self.create_numeric_card("LEITURAS RECEBIDAS", "0", "22px")
         self.card_volume = self.create_numeric_card("VOLUME TOTAL ADICIONADO", "0.00 mL", "22px")
-        self.card_diametroMedio = self.create_numeric_card("poxa vida funcionou","----", "16px")
 
         left_panel.addWidget(self.card_cond)
         left_panel.addWidget(self.card_leituras)
         left_panel.addWidget(self.card_volume)
-        left_panel.addWidget(self.card_diametroMedio)
-
 
         titulacao_frame = QFrame()
         titulacao_frame.setStyleSheet(
@@ -290,7 +217,6 @@ class MedicaoScreen(QWidget):
         self.spin_volume_adicao.setDecimals(2)
         self.spin_volume_adicao.setRange(0.01, 100.0)
         self.spin_volume_adicao.setValue(2.00)
-        self
         self.spin_volume_adicao.setSingleStep(0.5)
         self.spin_volume_adicao.setStyleSheet(f"""
             QDoubleSpinBox {{
@@ -300,12 +226,11 @@ class MedicaoScreen(QWidget):
                 padding: 8px;
                 font-size: 20px;
             }}
-
             QDoubleSpinBox::up-button,
             QDoubleSpinBox::down-button {{
                 width: 40px;
             }}
-            """)
+        """)
 
         btn_registrar_adicao = QPushButton("Registrar Adição")
         btn_registrar_adicao.setFixedHeight(60)
@@ -355,109 +280,13 @@ class MedicaoScreen(QWidget):
         body_layout.addWidget(chart_frame, stretch=65)
         return pagina
 
-    def processar(self):
-        if self.massa_amostra_g is None:
-            print("[PROCESSAMENTO] Massa da amostra não definida.")
-            return
-        try:
-            resultado = detectar_cmc_joao_original(self.app_app.titulacao)
-            ctc_final = cmc_para_ctc(
-                volume_no_corte_mL=resultado["volume_cmc_mL"],
-                massa_amostra_g=self.massa_amostra_g,
-                normalidade_titulante=0.01,
-            )
-
-            df_input = pd.DataFrame([{'ctc_consenso_meq_100g': ctc_final}])
-            predicoes = self.app_app.predictor.prever(df_input)
-            df_granulo = predicoes["granulometria"]
-            df_fases = predicoes["fases_minerais"]
-
-
-            self.plotar_resultado_cmc(resultado)
-            self.atualizar_resultado(resultado["cmc"], ctc_final, df_granulo, df_fases)
-
-            self.app_app.salvar_dados_csv(resultado, ctc_final, df_granulo, df_fases)
-            salvar_ensaio(
-                resultado={**resultado, "massa_amostra_g": self.massa_amostra_g},
-                ctc_final=ctc_final,
-                df_granulo=df_granulo,
-                df_fases=df_fases,
-                amostra_nome = self.nome_amostra
-                )
-
-        except Exception as erro:
-            print(f"[PROCESSAMENTO] Erro ao processar CMC/CTC/Inferência: {erro}")
-            QMessageBox.critical(
-                self, "Erro ao processar",
-                f"Não foi possível calcular ou prever os dados desta amostra.\n\nDetalhe: {erro}"
-            )
-            
-    def _on_registrar_adicao(self):
-        volume_mL = self.spin_volume_adicao.value()
-        self.app_app.registrar_adicao(volume_mL)
-        self._verificar_cmc_tempo_real()
-        
-    def _verificar_cmc_tempo_real(self):
-        """
-        Roda a mesma detecção usada no botão 'Processar', mas a cada nova
-        adição registrada durante a coleta. Só interrompe o usuário quando
-        o trecho linear encontrado for MAIOR do que o último trecho já
-        avisado -- ou seja, quando a curva "cresceu" na região achatada
-        pós-CMC, sugerindo um ponto de corte mais robusto/confiável.
-
-        Se o usuário responder "Não", o tamanho do trecho atual fica
-        registrado como piso: só voltamos a perguntar se um trecho ainda
-        maior aparecer depois. Isso evita repetir o popup a cada ponto novo
-        que só confirma o mesmo platô.
-
-        ValueError aqui é esperado e silencioso: no início da coleta ainda
-        não há pontos suficientes pra formar nenhum trecho linear dentro
-        do limiar -- não é erro, é a curva ainda "descendo".
-
-        No 'Sim', só paramos a coleta (parar_teste) -- de propósito NÃO
-        chamamos processar() aqui: processar() grava CSV e no banco
-        (efeito colateral permanente) e roda inferência de ML, então deve
-        continuar sendo uma ação explícita do usuário, no botão dedicado.
-        """
-        if self.massa_amostra_g is None:
-            return
-        try:
-            resultado = detectar_cmc_joao_original(self.app_app.titulacao)
-        except ValueError:
-            return
-        except Exception as erro:
-            print(f"[CMC tempo real] erro inesperado na detecção: {erro}")
-            return
-
-        tamanho_trecho = len(resultado["x_trecho"])
-        if tamanho_trecho <= self._maior_trecho_cmc_visto:
-            return
-
-        self._maior_trecho_cmc_visto = tamanho_trecho
-
-        cmc = resultado["cmc"]
-        volume_cmc = resultado["volume_cmc_mL"]
-        resposta = QMessageBox.question(
-            self,
-            "Ponto de CMC encontrado",
-            f"Um trecho linear maior foi identificado na curva.\n\n"
-            f"Concentração no ponto de corte: {cmc:.6f} mol/L\n"
-            f"Volume acumulado no ponto de corte: {volume_cmc:.2f} mL\n"
-            f"Pontos no trecho linear: {tamanho_trecho}\n\n"
-            "Deseja parar a coleta agora?",
-            QMessageBox.Sim | QMessageBox.Não,
-            QMessageBox.Não,  # padrão seguro -- nunca para sozinho
-        )
-        if resposta == QMessageBox.Yes:
-            self.app_app.parar_teste()
-
     def _build_pagina_finalizado(self):
         pagina = QWidget()
         body_layout = QHBoxLayout(pagina)
         body_layout.setContentsMargins(12, 12, 12, 12)
         body_layout.setSpacing(12)
 
-        #painel esquerdo (conteúdo que vai rolar)
+        # painel esquerdo (conteúdo que vai rolar)
         left_content = QWidget()
         left_panel = QVBoxLayout(left_content)
         left_panel.setContentsMargins(0, 0, 0, 0)
@@ -475,7 +304,6 @@ class MedicaoScreen(QWidget):
         self.card_non  = self.create_numeric_card("Nontronita (%)", "----", "16px", attr_name="nontronita")
         self.card_cris = self.create_numeric_card("Cristobalita (%)", "----", "16px", attr_name="cristobalita")
 
-
         layout_d10_d50 = QHBoxLayout()
         layout_d10_d50.setContentsMargins(0, 0, 0, 0)
         layout_d10_d50.setSpacing(10)
@@ -487,7 +315,6 @@ class MedicaoScreen(QWidget):
         layout_d90_dm.setSpacing(10)
         layout_d90_dm.addWidget(self.card_d90)
         layout_d90_dm.addWidget(self.card_diametroMedio)
-
 
         left_panel.addWidget(self.card_cmc)
         left_panel.addWidget(self.card_ctc)
@@ -507,7 +334,7 @@ class MedicaoScreen(QWidget):
         left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         left_scroll.setProperty("touchScroll", True)
 
-        # ---------- gráfico (fixo, fora do scroll) ----------
+        # gráfico (fixo, fora do scroll)
         chart_frame = QFrame()
         chart_frame.setStyleSheet(
             f"background-color: {HEX_SURFACE}; border: 1px solid {HEX_BORDER}; border-radius: 4px;"
@@ -566,6 +393,155 @@ class MedicaoScreen(QWidget):
         body_layout.addWidget(chart_frame, stretch=65)
         return pagina
 
+    # ────────────────────────────────────────────────────────────────
+    # Ações dos botões
+    # ────────────────────────────────────────────────────────────────
+    def _on_iniciar_coleta_clicado(self):
+        """Salva nome e massa e leva para a tela de coleta (modo 'aguardando').
+        A aquisição real só começa quando o botão 'Iniciar' do rodapé é pressionado."""
+        self.massa_amostra_g = self.spin_massa_amostra.value()
+        self.nome_amostra = self.campo_nome_amostra.text().strip() or None
+        self.mostrar_estado_coleta_aguardando()
+
+    def _on_iniciar_clicado(self):
+        self.app_app.iniciar_teste(self.massa_amostra_g)
+
+    def _parar_e_processar(self):
+        """Para a coleta e roda CMC -> CTC -> modelo -> salvar.
+        Se o CMC ainda não for detectável, avisa antes de encerrar."""
+        try:
+            detectar_cmc_joao_original(self.app_app.titulacao)
+        except Exception as erro:
+            resposta = QMessageBox.question(
+                self,
+                "CMC não detectado",
+                "Ainda não foi possível detectar o CMC com os pontos registrados.\n\n"
+                f"Detalhe: {erro}\n\n"
+                "Se parar agora, não será possível continuar esta titulação.\n"
+                "Deseja parar mesmo assim?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if resposta != QMessageBox.Yes:
+                return 
+            self.app_app.parar_teste() 
+            return
+
+        self.app_app.parar_teste()
+        self.processar()
+
+    def _on_voltar_clicado(self):
+        # Na tela inicial não tem nada em andamento -- sai direto
+        if self.stack_estados.currentIndex() == self.ESTADO_INICIAL:
+            self.app_app.voltar_home()
+            return
+
+        resposta = QMessageBox.question(
+            self,
+            "Descartar medição?",
+            "Você tem uma medição em andamento (ou recém-concluída) que ainda "
+            "não foi salva/exportada.\n\n"
+            "Se voltar agora, todos os dados desta medição serão perdidos.\n\n"
+            "Deseja realmente descartar e voltar?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if resposta != QMessageBox.Yes:
+            return
+
+        # Só para o Arduino (sem processar/salvar nada, pois a medição está sendo descartada)
+        if self.app_app.coletando:
+            self.app_app.parar_teste()
+
+        self.app_app.novo_ensaio()
+        self.app_app.voltar_home()
+
+    def _on_registrar_adicao(self):
+        volume_mL = self.spin_volume_adicao.value()
+        self.app_app.registrar_adicao(volume_mL)
+        self._verificar_cmc_tempo_real()
+
+    def _verificar_cmc_tempo_real(self):
+        """
+        A cada adição registrada, roda a detecção de CMC. Quando acha um trecho
+        linear MAIOR que o último já avisado, pergunta se deve parar a coleta.
+        Se o usuário responder 'Sim', para a coleta E já processa (modelo roda).
+        Se responder 'Não', só volta a perguntar quando aparecer um trecho ainda maior.
+        """
+        if self.massa_amostra_g is None:
+            return
+        try:
+            resultado = detectar_cmc_joao_original(self.app_app.titulacao)
+        except ValueError:
+            # Ainda não há pontos suficientes para um trecho linear: esperado
+            return
+        except Exception as erro:
+            print(f"[CMC tempo real] erro inesperado na detecção: {erro}")
+            return
+
+        tamanho_trecho = len(resultado["x_trecho"])
+        if tamanho_trecho <= self._maior_trecho_cmc_visto:
+            return
+
+        self._maior_trecho_cmc_visto = tamanho_trecho
+
+        cmc = resultado["cmc"]
+        volume_cmc = resultado["volume_cmc_mL"]
+        resposta = QMessageBox.question(
+            self,
+            "Ponto de CMC encontrado",
+            f"Um trecho linear maior foi identificado na curva.\n\n"
+            f"Concentração no ponto de corte: {cmc:.6f} mol/L\n"
+            f"Volume acumulado no ponto de corte: {volume_cmc:.2f} mL\n"
+            f"Pontos no trecho linear: {tamanho_trecho}\n\n"
+            "Deseja parar a coleta e processar agora?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,  # padrão seguro -- nunca para sozinho
+        )
+        if resposta == QMessageBox.Yes:
+            self._parar_e_processar()
+
+    def processar(self):
+        if self.massa_amostra_g is None:
+            print("[PROCESSAMENTO] Massa da amostra não definida.")
+            return
+        try:
+            resultado = detectar_cmc_joao_original(self.app_app.titulacao)
+            ctc_final = cmc_para_ctc(
+                volume_no_corte_mL=resultado["volume_cmc_mL"],
+                massa_amostra_g=self.massa_amostra_g,
+                normalidade_titulante=0.01,
+            )
+
+            # O modelo foi treinado só com CTC
+            df_input = pd.DataFrame([{'ctc_consenso_meq_100g': ctc_final}])
+            predicoes = self.app_app.predictor.prever(df_input)
+            df_granulo = predicoes["granulometria"]
+            df_fases = predicoes["fases_minerais"]
+
+            self.plotar_resultado_cmc(resultado)
+            self.atualizar_resultado(resultado["cmc"], ctc_final, df_granulo, df_fases)
+            if not self._ensaio_salvo:
+                self.app_app.salvar_dados_csv(resultado, ctc_final, df_granulo, df_fases)
+                salvar_ensaio(
+                    resultado={**resultado, "massa_amostra_g": self.massa_amostra_g},
+                    ctc_final=ctc_final,
+                    df_granulo=df_granulo,
+                    df_fases=df_fases,
+                    amostra_nome=self.nome_amostra,
+                )
+                self._ensaio_salvo = True
+
+        except Exception as erro:
+            print(f"[PROCESSAMENTO] Erro ao processar CMC/CTC/Inferência: {erro}")
+            QMessageBox.critical(
+                self, "Erro ao processar",
+                f"Não foi possível calcular ou prever os dados desta amostra.\n\nDetalhe: {erro}"
+            )
+
+    # ────────────────────────────────────────────────────────────────
+    # Estados da tela
+    # ────────────────────────────────────────────────────────────────
     def mostrar_estado_inicial(self):
         self.stack_estados.setCurrentIndex(self.ESTADO_INICIAL)
         self.btn_parar.setEnabled(False)
@@ -574,7 +550,7 @@ class MedicaoScreen(QWidget):
         self.btn_iniciar.setEnabled(False)
 
     def mostrar_estado_coleta_aguardando(self):
-        """Troca pra tela de coleta, mas aquisição ainda NÃO começou."""
+        """Troca pra tela de coleta, mas a aquisição ainda NÃO começou."""
         self.stack_estados.setCurrentIndex(self.ESTADO_COLETA)
         self.btn_iniciar.setEnabled(True)
         self.btn_parar.setEnabled(False)
@@ -591,23 +567,14 @@ class MedicaoScreen(QWidget):
 
     def mostrar_estado_finalizado(self):
         self.stack_estados.setCurrentIndex(self.ESTADO_FINALIZADO)
+        self.btn_iniciar.setEnabled(False)
         self.btn_parar.setEnabled(False)
         self.btn_processar.setEnabled(True)
         self.btn_salvar.setEnabled(True)
 
-    def _teste_inferencia_direta(self):
-        """MÉTODO DE DEBUG -- remover antes de ir pra produção."""
-        ctc_fake = 48
-        df_input = pd.DataFrame([{'ctc_consenso_meq_100g': ctc_fake}])
-        predicoes = self.predictor.prever(df_input)
-        df_granulo = predicoes["granulometria"]
-        df_fases = predicoes["fases_minerais"]
-        
-
-        self.atualizar_resultado(cmc=0.001234, ctc=ctc_fake, df_granulo=df_granulo, df_fases=df_fases)
-        print(df_granulo)
-        print(df_fases)
-
+    # ────────────────────────────────────────────────────────────────
+    # Widgets auxiliares e atualização de telas
+    # ────────────────────────────────────────────────────────────────
     def create_numeric_card(self, title, initial_value, font_size, attr_name=None):
         frame = QFrame()
         frame.setStyleSheet(
@@ -629,7 +596,6 @@ class MedicaoScreen(QWidget):
 
         layout.addWidget(title_lbl)
         layout.addWidget(val_lbl)
-
 
         nome_attr = attr_name or title.lower().replace(' ', '_')
         setattr(self, f"lbl_{nome_attr}", val_lbl)
@@ -656,27 +622,28 @@ class MedicaoScreen(QWidget):
         self.series_titulacao_linear.clear()
         self.series_ajuste_rls.clear()
         self._maior_trecho_cmc_visto = 0
-        if hasattr(self, "_ultimo_cmc"):
-            del self._ultimo_cmc
+        self._ultimo_cmc = None
+        self._ultimo_ctc = None
+        self._ensaio_salvo = False
+
+
         self.lbl_volume_total_adicionado.setText("0.00 mL")
         self.lbl_leituras_recebidas.setText("0")
         self.lbl_cmc.setText("-- (aperte Processar)")
         self.lbl_ctc.setText("-- mEq/100g")
-        self.lbl_drx.setText("drx estimado")
-        self.lbl_granulometria.setText("granulometria")
+        for lbl in (
+            self.lbl_d10, self.lbl_d50, self.lbl_d90, self.lbl_diametro_medio,
+            self.lbl_montmorilonita, self.lbl_caulinita, self.lbl_quartzo,
+            self.lbl_nontronita, self.lbl_cristobalita,
+        ):
+            lbl.setText("----")
 
     def atualizar_volume_total(self, volume_mL):
         self.lbl_volume_total_adicionado.setText(f"{volume_mL:.2f} mL")
 
     def plotar_resultado_cmc(self, resultado):
-        """
-        Atualiza o gráfico de Condutividade Molar × Concentração Molar
-        com o resultado de detectar_cmc_joao_original(): TODOS os pontos
-        medidos, os pontos que fazem parte do trecho linear identificado
-        (destacados em verde) e a reta única ajustada nesse trecho
-        (linha tracejada).
-
-        """
+        """Atualiza o gráfico Condutividade Molar × Concentração Molar:
+        todos os pontos, o trecho linear (verde) e a reta ajustada (tracejada)."""
         concentracoes = resultado["concentracoes"]
         omegas = resultado["omegas"]
         x_trecho = resultado["x_trecho"]
@@ -698,9 +665,8 @@ class MedicaoScreen(QWidget):
         self.series_ajuste_rls.append(c_ini, a * c_ini + b)
         self.series_ajuste_rls.append(c_fim, a * c_fim + b)
 
-        self.axis_molar_x.setRange(0, float(concentracoes.max()) * 1.1)
-        self.axis_molar_y.setRange(0, float(omegas.max()) * 1.1)
-
+        self.axis_molar_x.setRange(0, float(np.max(concentracoes)) * 1.1)
+        self.axis_molar_y.setRange(0, float(np.max(omegas)) * 1.1)
 
     def atualizar_resultado(self, cmc, ctc, df_granulo, df_fases):
         self.lbl_cmc.setText(f"{cmc:.6f} mol/L")
@@ -711,14 +677,15 @@ class MedicaoScreen(QWidget):
         self.lbl_d50.setText(f"{g['d50_um_com']:.2f}")
         self.lbl_d90.setText(f"{g['d90_um_com']:.2f}")
         self.lbl_diametro_medio.setText(f"{g['diametro_medio_um_com']:.2f}")
-    
+
         f = df_fases.iloc[0]
-        
+
         def fase_pct(val):
             v = float(val)
             if 0 < v <= 1.0:
                 v *= 100.0
             return f"{v:.2f}%"
+
         self.lbl_montmorilonita.setText(fase_pct(f['Montmorilonita']))
         self.lbl_caulinita.setText(fase_pct(f['Caulinita']))
         self.lbl_quartzo.setText(fase_pct(f['Quartzo']))
@@ -727,6 +694,7 @@ class MedicaoScreen(QWidget):
 
         self._ultimo_cmc = cmc
         self._ultimo_ctc = ctc
+
     def get_button_style(self, is_action=False):
         if is_action:
             return f"""
@@ -744,7 +712,6 @@ class MedicaoScreen(QWidget):
     # Exportação de relatório (botão "Salvar")
     # ────────────────────────────────────────────────────────────────
     def exportar_relatorio(self):
-    
         if self.stack_estados.currentIndex() != self.ESTADO_FINALIZADO:
             QMessageBox.warning(
                 self, "Exportação indisponível",
@@ -752,7 +719,7 @@ class MedicaoScreen(QWidget):
             )
             return
 
-        if not hasattr(self, "_ultimo_cmc") or self._ultimo_cmc is None:
+        if self._ultimo_cmc is None:
             QMessageBox.warning(
                 self, "Nada para exportar",
                 "Ainda não há um resultado calculado nesta amostra."
@@ -777,9 +744,6 @@ class MedicaoScreen(QWidget):
                     caminho += ".pdf"
                 self._exportar_pdf(caminho)
 
-        except Exception as erro:
-            QMessageBox.critical(self, "Erro ao exportar", f"Não foi possível salvar o relatório.\n\nDetalhe: {erro}")
-
         except PermissionError:
             self._limpar_arquivo_corrompido(caminho)
             QMessageBox.critical(
@@ -787,13 +751,18 @@ class MedicaoScreen(QWidget):
                 f"Não foi possível salvar em:\n{caminho}\n\n"
                 "Verifique se o arquivo já está aberto em outro programa ou a pasta possui permissão de escrita"
             )
+            return
         except OSError as e:
             self._limpar_arquivo_corrompido(caminho)
             QMessageBox.critical(
-            self, "Erro de Armazenamento",
-            f"Falha de gravação no sistema de arquivos do Raspberry Pi.\n\nDetalhes: {e}"
+                self, "Erro de Armazenamento",
+                f"Falha de gravação no sistema de arquivos do Raspberry Pi.\n\nDetalhes: {e}"
             )
-        
+            return
+        except Exception as erro:
+            QMessageBox.critical(self, "Erro ao exportar", f"Não foi possível salvar o relatório.\n\nDetalhe: {erro}")
+            return
+
         QMessageBox.information(self, "Exportado", f"Relatório salvo em:\n{caminho}")
 
     def _exportar_png(self, caminho):
@@ -810,9 +779,7 @@ class MedicaoScreen(QWidget):
             except OSError:
                 pass
 
-
     def _exportar_pdf(self, caminho):
-        # Captura a imagem do gráfico antes de abrir a gravação de arquivo
         pixmap = self.chart_view_molar.grab()
         if pixmap.isNull() or pixmap.width() == 0:
             raise RuntimeError("Não foi possível renderizar a imagem do gráfico.")
@@ -840,10 +807,10 @@ class MedicaoScreen(QWidget):
             painter.setFont(fonte_corpo)
             linhas_cabecalho = [
                 f"Data/hora: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}",
+                f"Amostra: {self.nome_amostra}" if self.nome_amostra else "Amostra: --",
                 f"Massa da amostra: {self.massa_amostra_g:.1f} g" if self.massa_amostra_g else "Massa da amostra: --",
                 f"CMC: {self._ultimo_cmc:.6f} mol/L",
                 f"CTC: {self._ultimo_ctc:.2f} mEq/100g",
-                f"Classificação: {self._ultimo_tipo}",
             ]
             espacamento_linha = int(fonte_corpo.pointSize() * 2.6)
             for linha in linhas_cabecalho:
@@ -851,7 +818,6 @@ class MedicaoScreen(QWidget):
                 y += espacamento_linha
 
             y += margem // 2
-
 
             area_disponivel = QRectF(
                 margem, y,

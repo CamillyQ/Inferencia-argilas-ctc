@@ -18,8 +18,7 @@ def exportar_modelos():
     con.close()
 
     X = df[FEATURE_PRINCIPAL]
-
-    # 1. Treinar SVR para cada alvo de Granulometria
+    
     modelos_granulometria = {}
     for alvo in ALVOS_GRANULOMETRIA:
         y = df[alvo]

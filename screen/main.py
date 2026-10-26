@@ -79,8 +79,8 @@ class ScadaApp(QMainWindow):
         self._tick()
 
         # ── Salvamento de Dados ─────────────────────────────────────────────
-    def salvar_dados_csv(self, resultado, ctc_final):
-        """Gera um arquivo CSV com o resumo do ensaio e os pontos de titulação."""
+    def salvar_dados_csv(self, resultado, ctc_final, df_granulo=None, df_fases=None):
+        """Gera um arquivo CSV com o resumo do ensaio, a previsão do modelo e os pontos de titulação."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         nome_arquivo = f"ensaio_{timestamp}.csv"
 
@@ -96,6 +96,19 @@ class ScadaApp(QMainWindow):
                 writer.writerow(["Volume no Corte (mL)", resultado.get("volume_cmc_mL", "")])
                 writer.writerow(["CTC (cmolc/kg)", ctc_final])
                 writer.writerow([])
+
+                # Previsão do modelo
+                if df_granulo is not None:
+                    writer.writerow(["--- GRANULOMETRIA PREVISTA (um) ---"])
+                    for col, val in df_granulo.iloc[0].items():
+                        writer.writerow([col, f"{float(val):.4f}"])
+                    writer.writerow([])
+
+                if df_fases is not None:
+                    writer.writerow(["--- FASES MINERAIS PREVISTAS ---"])
+                    for col, val in df_fases.iloc[0].items():
+                        writer.writerow([col, f"{float(val):.4f}"])
+                    writer.writerow([])
 
                 # Dados da Titulação
                 writer.writerow(["--- DADOS DA TITULAÇÃO ---"])

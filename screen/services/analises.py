@@ -242,7 +242,7 @@ def prever_tipo_argila_ml(ctc_meq_100g):
     return f"{classe_prevista} (modelo ML -- base pequena, verificar por DRX)"
 
 
-# ---- teste ----
+
 for ctc_teste in [40.0, 46.0, 56.0, 85.0, 8.0, 25.0]:
     print(f"CTC={ctc_teste:>5.1f} -> {prever_tipo_argila_ml(ctc_teste)}")
 
